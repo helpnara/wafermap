@@ -1,9 +1,16 @@
 # EDS Wafer Map 기반 이상 공정 탐지 및 원인 분석 시스템 — 설계서
 
-> **문서 버전** v1.0 (2026-08-17) · **상태** 설계 확정 대기
+> **문서 버전** v1.1 (2026-08-17) · **상태** 설계 확정 — 개발 착수 대기
 > **목적** 반도체 EDS(Electrical Die Sorting) 테스트 결과인 wafer map으로부터 이상 공정을 특정하고,
 > 해당 공정의 설비/FDC 데이터와 연결하여 불량 원인을 규명한 뒤 개선방안과 기대효과를 도출하는
-> Streamlit 기반 분석 애플리케이션.
+> Streamlit 기반 분석 애플리케이션. 개발과 동시에 **코드를 학습 자료로도 남기는 것**을 2차 목적으로 한다.
+
+### 변경 이력
+
+| 버전 | 일자 | 내용 |
+|---|---|---|
+| v1.0 | 2026-08-17 | 최초 설계 (데이터 전략, 분석 모듈 M1~M6, Streamlit 구성, 리포지토리 구조) |
+| v1.1 | 2026-08-17 | 사용자 확정사항 반영(제품=DRAM, 데이터 순서, ROI UI화) + **§5 코드 학습 지원 체계(도움말/학습 메뉴)** 신설 + §11 백로그 신설 |
 
 ---
 
@@ -13,20 +20,32 @@
 
 EDS(Electrical Die Sorting)는 FAB 공정이 완료된 웨이퍼를 조립(Assembly) 전에 웨이퍼 상태로
 전기적 검사하는 단계다. 국내 메모리 업계 용어이며, 산업 일반 용어로는 Wafer Test / Probe Test /
-CP(Chip Probe)에 해당한다.
+CP(Chip Probe)에 해당한다. 본 프로젝트는 **가상 DRAM 제품**(§2.5.1)을 기준으로 시나리오를 구성한다.
 
 전형적인 EDS 흐름:
 
 | 단계 | 내용 | 산출물 |
 |---|---|---|
 | EDS #1 | DC Parametric — open/short, leakage 등 기본 전기특성 | Bin code |
-| EDS #2 | Function Test — cell fail 검출 | Fail bit map |
-| Repair | Laser/e-Fuse repair — redundancy cell로 대체 | Repair log |
+| EDS #2 | Function Test — cell fail 검출 (DRAM은 cell array read/write 포함) | Fail bit map |
+| Repair | Laser/e-Fuse repair — redundancy row/column으로 대체 | Repair log |
 | EDS #3 | Post-repair verify | Bin code |
-| EDS #4 | Burn-in / Stress / Speed grading | 최종 Bin sort |
+| EDS #4 | Burn-in / Retention·Refresh Stress / Speed grading | 최종 Bin sort |
 
-각 die는 최종적으로 Bin code를 부여받는다(Bin1 = Good, Bin2~N = fail mode별 코드).
+각 die는 최종적으로 Bin code를 부여받는다. DRAM 특화 Bin 정의 예시:
+
+| Bin | 의미 |
+|---|---|
+| Bin1 | Good |
+| Bin2 | Open/Short (전기적 단선/단락) |
+| Bin3 | Leakage (누설전류 초과) |
+| Bin4 | Cell Fail (function test 실패, repair 후에도 잔존) |
+| Bin5 | Refresh/Retention Fail (DRAM 특유 — capacitor 전하 유지 불량) |
+| Bin6 | Speed Fail (AC parametric, burn-in 후 등급 미달) |
+
 **die별 pass/fail을 웨이퍼 좌표에 배열한 것이 wafer map(bin map)** 이며, 본 프로젝트의 출발점이다.
+분류 모델(M1)은 WM-811K 표준에 따라 pass/fail 이진 맵의 **공간 패턴**을 다루고, Bin 세부 분포는
+`2_웨이퍼맵_탐색` 페이지에서 참고 정보로만 제공한다(패턴 라벨 자체는 WM-811K 원 라벨을 그대로 사용).
 
 ### 1.2 현업의 문제
 
@@ -57,10 +76,11 @@ Wafer map의 **공간적 패턴은 원인 공정의 지문(fingerprint)** 이다
 ### 2.1 핵심 제약
 
 **공개 데이터 중 wafer map과 공정 설비 센서(FDC)가 실제로 연결된 데이터셋은 존재하지 않는다.**
+또한 WM-811K 원본(`LSWMD.pkl`, 약 2GB)은 개발 컨테이너에서 직접 내려받을 수 없다(§2.3).
 
 | 데이터셋 | 내용 | 한계 |
 |---|---|---|
-| WM-811K (MIR Lab) | 실제 fab의 wafer map 811,457장, 그중 172,950장 패턴 라벨(9종) | 공정/설비 정보 없음 |
+| WM-811K (MIR Lab) | 실제 fab의 wafer map 811,457장, 그중 172,950장 패턴 라벨(9종) | 공정/설비 정보 없음, 용량 큼 |
 | UCI SECOM | 반도체 공정 센서 590개 × 1,567 lot, pass/fail | 센서 의미 익명화, wafer map 없음 |
 | UCI SECOM 계열 | — | 두 데이터 간 조인 키 없음 |
 
@@ -69,7 +89,7 @@ Wafer map의 **공간적 패턴은 원인 공정의 지문(fingerprint)** 이다
 ```
 ┌────────────────────────┐        ┌──────────────────────────────┐
 │ WM-811K (실측)          │        │ FDC Simulator (합성)          │
-│ · die-level bin map     │◀──조인──▶│ · 8개 공정 스텝, 설비/챔버    │
+│ · die-level bin map     │◀──조인──▶│ · 9개 공정 스텝, 설비/챔버    │
 │ · 9종 패턴 라벨          │ lot/    │ · 파라미터 시계열·요약통계     │
 │ · 811k wafer            │ wafer   │ · 패턴별 인과 섭동 주입        │
 └────────────────────────┘  key    │ · ground truth 동시 생성       │
@@ -83,24 +103,29 @@ Wafer map의 **공간적 패턴은 원인 공정의 지문(fingerprint)** 이다
 2. **합성은 임의가 아니라 물리 기반** — 각 불량 패턴에 대해 반도체 공정 물리로 설명되는
    원인 스텝·파라미터를 문헌/현업 지식에 근거해 매핑하고(§2.4), 그 파라미터에만 섭동을 주입.
 3. **난이도를 인위적으로 유지** — 교락 요인, 정상군 드리프트(위양성), 설명 불가 불량(위음성),
-   챔버 간 baseline 편차, 시간에 따른 설비 노후화를 함께 주입해 분석이 자명해지지 않게 한다.
+   챔버 간 baseline 편차, 시간에 따른 설비 노후화, 원인과 무관한 **distractor 스텝**(§2.5)을
+   함께 주입해 분석이 자명해지지 않게 한다.
 4. **Ground truth를 별도 보관** — `ground_truth.parquet`에 실제 주입한 원인 스텝/설비/파라미터를
    기록. 이를 **원인 규명 모델의 정답지**로 사용해 "원인 분석 정확도"라는 정량 지표를 제시한다.
    → 대부분의 유사 포트폴리오가 못 하는 차별점.
 
-### 2.3 개발 환경 제약과 대응
+### 2.3 개발 순서 — 합성 우선, 로컬 실데이터 후속 [확정]
 
-현 개발 컨테이너는 네트워크 정책상 pypi/npm만 허용되고 Kaggle/UCI/HuggingFace는 차단되어
-**WM-811K 원본을 컨테이너에서 내려받을 수 없다.** 대응:
+WM-811K 전체(약 2GB, 811,457장)는 크기가 크고, 현재 개발 컨테이너는 네트워크 정책상
+pypi/npm만 허용되어 Kaggle/UCI/HuggingFace가 차단된다. 두 이유 모두로 **원본을 이 환경에서
+직접 받지 않고, 합성 경로로 전체 파이프라인을 먼저 완성한다.**
 
-| 대응 | 내용 |
-|---|---|
-| `scripts/download_wm811k.py` | 사용자 로컬에서 Kaggle API로 `LSWMD.pkl` 다운로드 (~2GB) |
-| `src/wafermap/data/synth_wafer.py` | WM-811K와 **동일 스키마**의 합성 wafer map 생성기. 개발·CI·클라우드 데모용 |
-| 데이터 소스 토글 | 앱 사이드바에서 `실측(WM-811K)` / `데모(합성)` 전환. 코드 경로는 동일 |
+| 단계 | 위치 | 내용 |
+|---|---|---|
+| **1차 (본 세션)** | 개발 컨테이너 | `synth_wafer.py`로 WM-811K와 **동일 스키마**의 합성 wafer map 생성 → 전체 파이프라인(M1~M6) 개발·테스트·성능 리포트 |
+| **2차 (사용자 로컬)** | 사용자 PC | Kaggle API로 `LSWMD.pkl` 다운로드 → `scripts/download_wm811k.py` → `build_dataset.py --source real` 실행 → 실데이터 기준 모델 재학습·성능 재검증 |
 
-이 구조 덕분에 원본 없이 전체 파이프라인을 개발·테스트하고, 사용자가 로컬에서 `LSWMD.pkl`을
-`data/raw/`에 두는 순간 그대로 실데이터로 동작한다.
+데이터 소스는 앱 사이드바에서 `실측(WM-811K)` / `데모(합성)` 토글로 전환하며, **코드 경로는 완전히
+동일**하다(`src/wafermap/data/loader.py`가 스키마만 보고 분기). 이 구조 덕분에 원본 없이 개발한
+모든 모델·페이지가 사용자가 로컬에서 `LSWMD.pkl`을 `data/raw/`에 두는 순간 그대로 실데이터로 동작한다.
+
+> 실데이터 전환 시 체크리스트는 `docs/06_local_validation.md`(M7 산출물)에 별도 정리한다:
+> 라벨 분포 재확인 → 피처 재추출 → 모델 재학습 → macro-F1 재측정 → 합성 대비 성능 갭 문서화.
 
 ### 2.4 불량 패턴 ↔ 원인 공정 매핑 (도메인 코어)
 
@@ -120,8 +145,23 @@ Wafer map의 **공간적 패턴은 원인 공정의 지문(fingerprint)** 이다
 
 > 이 매핑은 시뮬레이터가 "심는" 정답이자, 커미널리티/SHAP 분석이 **독립적으로 다시 찾아내야 하는**
 > 대상이다. 앱의 규칙 기반 힌트에는 이 표를 노출하되, 모델 결과는 데이터에서만 도출한다.
+> `P045(Capacitor Formation, §2.5)`는 어떤 패턴과도 인과관계가 없는 **distractor 스텝**으로 두어,
+> 커미널리티 분석이 우연한 상관을 얼마나 걸러내는지 보여주는 장치로 쓴다.
 
 ### 2.5 가상 공정 플로우 (합성 FDC)
+
+#### 2.5.1 제품 프로파일 [확정: DRAM]
+
+| 항목 | 값 |
+|---|---|
+| 제품 | 가상 DDR5 DRAM, 16Gb density |
+| 공정 노드 | 1z-nm급 (가상) |
+| 웨이퍼 규격 | 300mm |
+| Die size (가정) | 약 4.5mm × 9.0mm |
+| Gross die/wafer | 약 1,750 (WM-811K 실측 맵의 die 배열을 그대로 쓰므로 참고값) |
+| Lot 구성 | 25 wafer/lot, slot 1~25 |
+
+#### 2.5.2 공정 스텝
 
 | Step | 공정 | 설비 (챔버) | 주요 파라미터 |
 |---|---|---|---|
@@ -129,14 +169,16 @@ Wafer map의 **공간적 패턴은 원인 공정의 지문(fingerprint)** 이다
 | P020 | Etch | ETCH-A/B/C (ch1~4) | rf_power, chamber_pressure, cf4_flow, o2_flow, electrode_temp, endpoint_time, edge_ring_rf_hours |
 | P030 | Thin Film / CVD | CVD-01/02 | dep_temp, precursor_flow, chamber_pressure, thickness_mean/sigma, susceptor_temp_mid_delta |
 | P040 | Implant | IMP-01/02 | dose, energy, beam_current, tilt_angle |
+| P045 | **Capacitor(Storage Node) Formation** — DRAM 특화 | CAP-01/02 | dielectric_thickness(HfO2), node_profile_cd, anneal_temp — *distractor, 어떤 패턴과도 인과 없음* |
 | P050 | CMP | CMP-01/02 (head1~4) | down_force, platen_speed, slurry_flow, pad_life, conditioning_time, removal_rate, center_zone_pressure |
 | P060 | Cleaning | CLN-01/02 | chem_conc, bath_temp, di_resistivity, particle_count, chuck_edge_temp_dev |
 | P070 | Diffusion / Anneal | DIFF-01 | furnace_temp_z1~z3, ramp_rate, o2_flow |
 | P080 | Inline Metrology | MET-01 | cd_mean/sigma, thickness, overlay_residual |
 
-- Lot = 25 wafer, wafer는 slot 1~25. Lot 단위로 스텝별 설비/챔버가 배정된다(현업과 동일).
+- Lot 단위로 스텝별 설비/챔버가 배정된다(현업과 동일, lot dispatching 시뮬레이션).
 - Slot 위치 효과(엣지 슬롯 열 이력 차이)를 약하게 부여 → 슬롯 상관 분석 소재.
 - 설비별 baseline 편차 + 시간 드리프트(PM 주기 톱니파) 주입 → 커미널리티/트렌드 분석 소재.
+- P045는 DRAM 공정 리얼리티를 더하는 동시에 **분석이 우연히 맞히는 것을 방지하는 노이즈 스텝**으로 기능.
 
 ### 2.6 데이터 스키마
 
@@ -145,7 +187,7 @@ data/processed/
 ├─ wafer_master.parquet      # 웨이퍼 1행
 │    wafer_id, lot_id, slot_no, product, tech_node,
 │    fab_in_time, eds_time, die_total, die_pass, yield_pct,
-│    pattern_label, map_path, data_source(real|synthetic)
+│    pattern_label, map_path, data_source(real|synthetic), is_labeled
 ├─ die_map.npz               # wafer_id → 2D int8 array (0=no die, 1=pass, 2=fail)
 ├─ fdc_summary.parquet       # (wafer_id, step_id) × 파라미터 wide
 │    wafer_id, step_id, step_name, equip_id, chamber_id, recipe_id,
@@ -157,11 +199,17 @@ data/processed/
      severity, is_confounded, is_unexplained
 ```
 
+> `is_labeled` 컬럼은 §11 백로그(미라벨 데이터 확장)를 위해 1차부터 스키마에 반영해 둔다
+> (지금은 전량 `True`; 미라벨 확장 시 `False` 레코드가 추가되는 구조).
+
 ---
 
 ## 3. 분석·모델 설계
 
 ### M1. Wafer Map 패턴 분류
+
+**범위 [확정]**: 라벨이 있는 WM-811K 172,950장(합성 단계에서는 동일 분포로 생성한 라벨 데이터)만
+1차로 사용한다. 미라벨 638,507장 활용은 §11 백로그로 이월.
 
 **입력** die-level bin map (가변 크기) → 64×64 정규화 그리드 (die-aware 리샘플링, 웨이퍼 외곽 마스크 보존)
 
@@ -238,7 +286,19 @@ data/processed/
    - 계측 샘플링 강화 구간 지정
 3. **기대효과 시뮬레이션**: 제안 spec 내로 파라미터를 clip한 반사실(counterfactual) 입력을
    학습 모델에 통과시켜 예측 수율 변화 산출. **가정(모델 외삽 한계, 인과 가정)을 명시적으로 표기.**
-4. **ROI 추정**: wafer 1장당 가치·월 투입량을 사용자가 조정 가능한 입력으로 두고 연간 절감액 환산
+4. **ROI 추정 [확정: 기본값 + 앱 내 조정]** — 사용자가 정확한 시세를 모르므로, 공개 자료 기반의
+   보수적 가정치를 기본값으로 넣고 **`6_개선방안_기대효과` 페이지 사이드바에서 슬라이더/입력창으로
+   즉시 조정** 가능하게 만든다. 값을 바꾸면 연간 절감액이 실시간 재계산된다.
+
+   | 파라미터 | 기본값(가정) | 근거/비고 |
+   |---|---|---|
+   | wafer 1장당 가치 | 500만원 (가정) | 공정원가+양품 매출 기여분 추정치. 실측 아님 — 툴팁에 "가정치, 사내 원가자료로 교체 권장" 명시 |
+   | 월 투입 웨이퍼 수 | 3,000장 (가정) | 중소 팹 라인 규모 가정 |
+   | 개선 적용 수율 향상분 | M5.3 시뮬레이션 결과값 사용 | 데이터 기반 산출 |
+   | 적용 스텝 수 | 사용자 선택(1개 이상) | UI에서 다중 선택 가능 |
+
+   계산식: `연간 절감액 = 월 투입 웨이퍼 수 × 12 × 수율 향상분(%p) × wafer 1장당 가치`
+   모든 가정치 옆에 출처/성격(가정 vs 데이터 기반) 배지를 표시해 신뢰성을 관리한다.
 
 ### M6. 신규 웨이퍼 실시간 스코어링
 
@@ -259,8 +319,9 @@ data/processed/
 | `3_패턴_분류_모델` | 모델링 결과 | 피처 설명, LGBM vs CNN 비교, 혼동행렬, SHAP/Grad-CAM |
 | `4_이상공정_탐지` | 이상 구간 검출 | EWMA/CUSUM 관리도, alarm 목록, 이상군 정의 |
 | `5_원인_분석` | 핵심 페이지 | 커미널리티 랭킹 → 설비 선택 → FDC 분포 비교 → SHAP → trace 뷰어 |
-| `6_개선방안_기대효과` | 결론 | 권고 spec, 조치안 카드, 반사실 수율 시뮬레이터, ROI 계산기 |
+| `6_개선방안_기대효과` | 결론 | 권고 spec, 조치안 카드, 반사실 수율 시뮬레이터, **ROI 계산기(조정 가능)** |
 | `7_모델_검증` | 신뢰성 | ground truth 대비 원인규명 정확도, 실험 로그, 한계 명시 |
+| **`8_도움말_학습`** | **코드 학습(신규, §5)** | 모듈별 개념 설명, 실제 소스코드 하이라이트, 설계 노트, 용어사전, 자가진단 |
 
 ### 4.2 UX 원칙
 
@@ -282,7 +343,121 @@ data/processed/
 
 ---
 
-## 5. 리포지토리 구조
+## 5. 코드 학습 지원 체계 (도움말/학습 메뉴) — 신규
+
+### 5.1 목적
+
+이 프로젝트의 코드는 Claude가 작성하지만, **사용자가 나중에 스스로 읽고 이해하고 수정할 수 있어야
+코딩 감각이 유지된다.** 따라서 "동작하는 코드"와 별개로 "왜 이렇게 짰는지"를 설명하는 학습 자료를
+개발과 동시에 페어로 생산한다. 목표는 두 가지다.
+
+1. 앱을 만드는 과정 자체가 **반도체 도메인 + 데이터 분석 코드**를 배우는 교재가 되게 한다.
+2. 포트폴리오 리뷰어(또는 면접관)가 "이 코드 본인이 이해하고 있나요?"라고 물었을 때, 이 메뉴를
+   근거로 설명할 수 있게 한다.
+
+### 5.2 구성 원칙
+
+| 원칙 | 내용 |
+|---|---|
+| **모듈-노트 페어링** | `src/wafermap/` 아래 핵심 모듈 하나당 `docs/learning_notes/` 학습노트 하나. 코드와 설명이 항상 짝을 이룸 |
+| **3단계 설명** | ① 무엇을 하는 코드인가(입출력) ② 어떻게 동작하는가(핵심 로직) ③ 왜 이렇게 만들었는가(대안과 트레이드오프) |
+| **읽기 순서 로드맵** | 학습 순서 = 개발 마일스톤 순서(M1→M7). 아무 모듈이나 던지지 않고 선행 개념부터 |
+| **자가진단** | 노트마다 이해도 확인 질문 2~3개 + 접이식 정답. 단순 "읽었다"가 아니라 "설명할 수 있다"를 목표 |
+| **용어사전 연동** | EDS/FDC/SPC/SHAP 등 도메인·통계·ML 용어는 노트 본문에서 바로 사전 항목으로 링크 |
+| **실제 코드 인용** | 발췌 코드가 아니라 **저장소의 실제 파일:라인**을 그대로 하이라이트해 보여줌(가짜 예시 코드 지양) |
+
+### 5.3 학습노트 저장 형식
+
+`docs/learning_notes/<module_slug>.md`, YAML frontmatter + 본문 고정 템플릿:
+
+```yaml
+---
+module: src/wafermap/analysis/commonality.py
+milestone: M3
+difficulty: 중급          # 초급 | 중급 | 고급
+concepts: [Fisher exact test, odds ratio, Benjamini-Hochberg FDR, 교락]
+prerequisites: [M2 SPC 이상구간 정의]
+---
+```
+
+```markdown
+## 이 코드는 무엇을 하나
+(입력/출력을 한 문단으로)
+
+## 핵심 로직
+(단계별로, 실제 함수/라인 인용)
+
+## 왜 이렇게 만들었나 — 설계 선택과 대안
+(예: "chi-square 대신 Fisher exact를 쓴 이유 — 셀 기대빈도가 5 미만인 설비가 많아서")
+
+## 확인 문제
+1. ...
+<details><summary>정답</summary>...</details>
+
+## 더 알아보기
+- (참고 문헌/개념 링크)
+```
+
+### 5.4 코드 주석 컨벤션
+
+학습 목적을 지원하기 위해, **일반 프로덕션 코드보다 주석 밀도를 의도적으로 높게** 유지한다.
+모든 공개 함수는 다음 docstring 틀을 따른다(한국어, Google 스타일 변형):
+
+```python
+def fisher_commonality(case_df, control_df, step_col, equip_col) -> pd.DataFrame:
+    """설비별 이상군/정상군 통과율을 비교해 원인 설비 후보를 랭킹한다.
+
+    무엇을: 스텝×설비 교차표를 만들고 Fisher exact test로 유의성을 검정한다.
+    어떻게: 설비별 2x2 표(이상군 pass/fail × 해당설비 통과여부)를 만들고,
+            scipy.stats.fisher_exact로 p-value, odds ratio를 계산한다.
+    왜:    chi-square는 저빈도 셀에서 근사가 깨지는데, 설비 수가 많아지면
+            표본이 쪼개져 저빈도 셀이 흔하다. Fisher exact는 정확검정이라 안전하다.
+
+    Args:
+        case_df: 이상군 wafer의 fdc_summary 서브셋
+        control_df: 정상군 wafer의 fdc_summary 서브셋
+    Returns:
+        설비별 (odds_ratio, ci_low, ci_high, p_value, p_adj) 랭킹 테이블
+    """
+```
+
+### 5.5 Streamlit 페이지 `8_도움말_학습`
+
+- **좌측**: 마일스톤(M1~M7) → 모듈 트리 선택
+- **본문 탭**:
+  1. `개념` — 이 모듈이 푸는 문제, 선행 개념
+  2. `코드` — 실제 소스 하이라이트(파일 경로·라인 표시), 함수 단위로 접기/펼치기
+  3. `설계 노트` — 대안 비교, 트레이드오프
+  4. `확인 문제` — 자가진단
+- **우측 사이드바**: 용어사전 검색, 관련 모듈 링크
+- 구현: 소스 파일을 직접 읽어 `st.code`로 렌더링(하드코딩 복붙 금지 → 코드가 바뀌면 노트도 항상
+  최신 소스를 반영). 학습노트 본문(설명)만 markdown 파일에서 로드.
+
+### 5.6 리포지토리 반영
+
+```
+src/wafermap/learning/
+├─ loader.py      # 학습노트(md+frontmatter) 파싱, 소스코드 발췌 로더
+└─ glossary.py     # 용어사전 데이터 (역할: 단어 → 정의 → 관련 모듈)
+pages/
+└─ 8_도움말_학습.py
+docs/learning_notes/
+├─ synth_wafer.md
+├─ fdc_simulator.md
+├─ pattern_lgbm.md
+├─ commonality.md
+├─ attribution.md
+└─ ...             # 모듈 1개당 1개, M1~M7 진행에 맞춰 순차 추가
+```
+
+### 5.7 완료 기준에 반영
+
+**각 마일스톤은 코드뿐 아니라 해당 모듈의 학습노트가 함께 작성되어야 완료로 간주한다**
+(§7 마일스톤 표에 반영).
+
+---
+
+## 6. 리포지토리 구조
 
 ```
 wafermap/
@@ -298,7 +473,8 @@ wafermap/
 │   ├─ 4_이상공정_탐지.py
 │   ├─ 5_원인_분석.py
 │   ├─ 6_개선방안_기대효과.py
-│   └─ 7_모델_검증.py
+│   ├─ 7_모델_검증.py
+│   └─ 8_도움말_학습.py              # 학습 메뉴 (§5)
 ├─ src/wafermap/
 │   ├─ config.py                     # 경로·상수·공정 플로우 정의
 │   ├─ data/
@@ -323,6 +499,9 @@ wafermap/
 │   │   ├─ attribution.py            # SHAP 래퍼, 분포 비교 검정
 │   │   ├─ recommend.py              # 최적 구간·조치안·반사실 시뮬레이션
 │   │   └─ validate.py               # ground truth 대비 원인규명 정확도
+│   ├─ learning/                     # 학습 메뉴 지원 (§5)
+│   │   ├─ loader.py
+│   │   └─ glossary.py
 │   └─ viz/
 │       ├─ wafer_plot.py             # 맵 렌더링(plotly/matplotlib)
 │       └─ charts.py
@@ -339,13 +518,16 @@ wafermap/
 │   ├─ 01_domain_eds.md              # EDS·패턴-공정 매핑 도메인 정리
 │   ├─ 02_data_dictionary.md
 │   ├─ 03_simulator_spec.md          # 합성 데이터 생성 가정 전체 공개
-│   └─ 04_results.md                 # 분석 결론·개선안 (포트폴리오 본문)
+│   ├─ 04_results.md                 # 분석 결론·개선안 (포트폴리오 본문)
+│   ├─ 05_learning_guide.md          # 학습 메뉴 총론·읽기 로드맵
+│   ├─ 06_local_validation.md        # 로컬 실데이터 전환 체크리스트
+│   └─ learning_notes/               # 모듈별 학습노트 (§5.3)
 └─ tests/                            # 피처·시뮬레이터·통계 함수 단위 테스트
 ```
 
 ---
 
-## 6. 기술 스택
+## 7. 기술 스택
 
 | 영역 | 선택 | 사유 |
 |---|---|---|
@@ -361,22 +543,22 @@ wafermap/
 
 ---
 
-## 7. 개발 마일스톤
+## 8. 개발 마일스톤
 
 | # | 산출물 | 완료 기준 |
 |---|---|---|
-| **M0** | 설계 문서 | 본 문서 확정 (현 단계) |
-| **M1** | 데이터 계층 | 합성 wafer 생성기 + FDC 시뮬레이터 + WM-811K 로더, `build_dataset.py` 실행 시 processed 일괄 생성, 스키마 테스트 통과 |
-| **M2** | 피처·패턴 모델 | 90차원 피처 파이프라인, LGBM macro-F1 리포트, CNN 비교, 아티팩트 저장 |
-| **M3** | 이상탐지·커미널리티 | EWMA/CUSUM alarm 검출, Fisher+BH-FDR 랭킹, CMH 층화 |
-| **M4** | 원인 모델·SHAP | cause model 학습, SHAP 산출, ground truth 대비 적중률 리포트 |
-| **M5** | 개선안·기대효과 | 권고 spec 도출, 반사실 수율 시뮬레이션, ROI 계산기 |
-| **M6** | Streamlit 통합 | 8개 페이지 동작, 전역 필터, 캐시 최적화 |
-| **M7** | 검증·문서·배포 | 테스트 통과, README·결과 문서, 클라우드 샘플·메모리 검증 |
+| **M0** | 설계 문서 | 본 문서 확정 (완료) |
+| **M1** | 데이터 계층 | 합성 wafer 생성기 + FDC 시뮬레이터(라벨 데이터 기준) + WM-811K 로더, `build_dataset.py` 실행 시 processed 일괄 생성, 스키마 테스트 통과, **학습노트**(`synth_wafer.md`, `fdc_simulator.md`) |
+| **M2** | 피처·패턴 모델 | 90차원 피처 파이프라인, LGBM macro-F1 리포트, CNN 비교, 아티팩트 저장, **학습노트**(`geometry.md`, `pattern_lgbm.md`, `pattern_cnn.md`) |
+| **M3** | 이상탐지·커미널리티 | EWMA/CUSUM alarm 검출, Fisher+BH-FDR 랭킹, CMH 층화, **학습노트**(`spc.md`, `commonality.md`) |
+| **M4** | 원인 모델·SHAP | cause model 학습, SHAP 산출, ground truth 대비 적중률 리포트, **학습노트**(`attribution.md`) |
+| **M5** | 개선안·기대효과 | 권고 spec 도출, 반사실 수율 시뮬레이션, ROI 계산기(조정 가능 UI), **학습노트**(`recommend.md`) |
+| **M6** | Streamlit 통합 | 8개 페이지(도움말 포함) 동작, 전역 필터, 캐시 최적화 |
+| **M7** | 검증·문서·배포·로컬전환 | 테스트 통과, README·결과 문서, 클라우드 샘플·메모리 검증, `06_local_validation.md` 작성, 로컬 실데이터 재검증 절차 확인 |
 
 ---
 
-## 8. 성공 기준 (포트폴리오 관점)
+## 9. 성공 기준 (포트폴리오 관점)
 
 | 지표 | 목표 |
 |---|---|
@@ -386,30 +568,45 @@ wafermap/
 | 원인 파라미터 Top-5 포함률 | ≥ 0.85 |
 | 앱 응답 | 페이지 전환 < 2초 (캐시 워밍 후) |
 | 서사 완결성 | 데이터 → 탐지 → 원인 → **개선안·기대효과**까지 단절 없이 연결 |
+| **학습노트 커버리지** | **핵심 모듈(§8 마일스톤 표 명시분) 100% 작성** |
 
 ---
 
-## 9. 리스크와 대응
+## 10. 리스크와 대응
 
 | 리스크 | 영향 | 대응 |
 |---|---|---|
 | WM-811K 라벨 노이즈(오라벨 알려짐) | 성능 상한 제약 | 문서에 명시, 혼동행렬로 오라벨 사례 제시 (한계 인식도 역량) |
 | 극심한 클래스 불균형 | 희소 클래스 붕괴 | class weight + 회전/미러 augmentation + macro-F1 주지표 |
 | **합성 FDC의 신뢰성 의심** | 포트폴리오 설득력 저하 | ① 출처 상시 명시 ② `03_simulator_spec.md`에 전 가정 공개 ③ ground truth 검증 지표 제시 ④ "방법론 검증용 디지털 트윈"으로 명확히 포지셔닝 |
-| 시뮬레이터가 너무 쉬워 분석이 자명 | 분석 역량 미증명 | 교락·노이즈·위양성/위음성·설비 baseline 편차 의도적 주입, 난이도 파라미터화 |
+| 시뮬레이터가 너무 쉬워 분석이 자명 | 분석 역량 미증명 | 교락·노이즈·위양성/위음성·설비 baseline 편차·distractor 스텝(P045) 의도적 주입 |
 | Streamlit Cloud 1GB 메모리 | 배포 실패 | 샘플 데이터셋 + 사전학습 아티팩트, 앱 내 학습 금지, 메모리 프로파일링 |
-| 개발 컨테이너 네트워크 차단 | 실데이터 검증 불가 | 합성 경로로 전체 개발, 사용자 로컬에서 실데이터 검증 단계 별도 |
+| 개발 컨테이너 네트워크 차단 | 실데이터 검증 불가 | 합성 경로로 전체 개발, 사용자 로컬에서 실데이터 검증 단계 별도(§2.3) |
 | 상관을 인과로 오독 | 잘못된 개선안 | 층화 분석, 인과 가정 UI 명시, 기대효과에 신뢰구간·가정 병기 |
+| ROI 가정치가 실제와 괴리 | 개선효과 신뢰성 저하 | 모든 가정치에 출처 배지 + 앱 내 즉시 조정 가능 UI(§3 M5.4) |
+| 학습노트가 코드와 어긋남(드리프트) | 학습 자료 신뢰성 저하 | 코드는 실제 소스를 실시간 인용(§5.5)해 하드코딩 복붙 방지, 마일스톤 완료 기준에 노트 갱신 포함 |
 
 ---
 
-## 10. 남은 확인 사항
+## 11. 백로그 (범위 밖 — 1차 검증 완료 후 진행)
 
-1. **WM-811K 실데이터 적용 시점** — 합성 경로로 전체 개발 완료 후, 로컬에서 `LSWMD.pkl`을
-   `data/raw/`에 두고 실행하는 방식으로 진행하면 되는지.
-2. **제품 시나리오** — 가상 제품을 DRAM(1z nm)으로 설정할지, 로직/파운드리로 할지.
-   (패턴-공정 매핑 자체는 큰 차이 없으나 용어·스텝 명칭에 영향)
-3. **데이터 규모** — 라벨이 있는 172,950장만 사용(표준 관행)할지, 미라벨 638k장으로
-   준지도/이상탐지까지 확장할지.
-4. **ROI 가정치** — wafer 1장당 가치, 월 투입 매수 기본값. (미정 시 공개 자료 기반 가정치를
-   사용하고 앱에서 조정 가능하게 처리)
+| 항목 | 내용 | 착수 조건 |
+|---|---|---|
+| **미라벨 데이터 확장** | WM-811K 미라벨 638,507장을 준지도학습(pseudo-labeling) 또는 비지도 이상탐지(오토인코더 재구성오차, 클러스터링)에 활용해 신규/미분류 패턴 발굴 | M1~M7 1차 개발·로컬 실데이터 검증 완료 후 |
+| DoWhy 등 본격 인과추론 | 상관·층화 분석을 넘어선 인과 그래프 기반 분석 | 사용자 요청 시 |
+| 다중 제품/노드 확장 | DRAM 외 로직/파운드리 시나리오 추가 | 포트폴리오 확장 필요 시 |
+| 실시간 스트리밍 FDC | 배치가 아닌 실시간 파라미터 스트림 대응 | 범위 외(현재는 배치 요약 통계 기준) |
+
+---
+
+## 12. 결정사항 (구 "남은 확인 사항" — 확정 반영)
+
+| # | 항목 | 결정 |
+|---|---|---|
+| 1 | 데이터 적용 순서 | 데이터 용량 문제로 **합성 경로 우선 개발 → 로컬에서 WM-811K 실데이터 검증**(§2.3) |
+| 2 | 제품 시나리오 | **DRAM** 기준 (§2.5.1, 1z-nm급 가상 16Gb DDR5) |
+| 3 | 데이터 규모 | **라벨 데이터부터 개발**, 미라벨 638k장 활용은 **백로그(§11)** 로 이월 |
+| 4 | ROI 가정치 | 확정 수치 없음 → **기본 가정치 + 앱 내 실시간 조정 UI**로 구성(§3 M5.4) |
+
+이제 M1(데이터 계층: 라벨 데이터 기준 합성 wafer 생성기 + FDC 시뮬레이터 + WM-811K 로더 + 학습노트
+2건)부터 개발을 시작한다.
