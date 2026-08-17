@@ -1,0 +1,31 @@
+# Data — 원본/중간 산출물은 커밋하지 않음 (data/sample 만 예외)
+data/raw/
+data/interim/
+data/processed/
+
+# Models — 대형 아티팩트 제외 (소형 배포용만 별도 허용)
+models/*.pt
+models/*.pkl
+!models/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+
+# Streamlit
+.streamlit/secrets.toml
