@@ -88,22 +88,27 @@ def make_model(n_classes: int = len(PATTERN_LABELS)):
     """
     import torch.nn as nn
 
-    def block(in_ch: int, out_ch: int) -> nn.Sequential:
-        return nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, padding=1),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_ch, out_ch, 3, padding=1),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),
-        )
+    def block(in_ch: int, out_ch: int, n_conv: int = 2) -> nn.Sequential:
+        layers: list[nn.Module] = []
+        for i in range(n_conv):
+            layers += [
+                nn.Conv2d(in_ch if i == 0 else out_ch, out_ch, 3, padding=1),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+            ]
+        layers.append(nn.MaxPool2d(2))
+        return nn.Sequential(*layers)
 
+    # 첫 블록만 conv 1회인 이유: 연산량은 (해상도² × 채널수)에 비례하는데,
+    # 64×64는 이 신경망에서 가장 해상도가 높은 지점이라 여기서 conv를 두 번 하면
+    # 전체 학습 시간의 절반을 잡아먹는다. 반면 초반 층이 배우는 것은 '불량 die가
+    # 인접해 있는가' 정도의 저수준 특징이라 층을 겹칠 실익이 작다.
+    # 대부분의 CNN이 초반에 빠르게 다운샘플하는 것도 같은 이유다.
     return nn.Sequential(
-        block(2, 16),    # 64 → 32
-        block(16, 32),   # 32 → 16
-        block(32, 64),   # 16 → 8
-        block(64, 96),   # 8 → 4   ← Grad-CAM이 참조하는 마지막 conv
+        block(2, 16, n_conv=1),   # 64 → 32
+        block(16, 32),            # 32 → 16
+        block(32, 64),            # 16 → 8
+        block(64, 96),            # 8 → 4   ← Grad-CAM이 참조하는 마지막 conv
         nn.AdaptiveAvgPool2d(1),
         nn.Flatten(),
         nn.Dropout(0.3),
@@ -116,7 +121,7 @@ def train_one(
     y_train: np.ndarray,
     *,
     epochs: int = 30,
-    batch_size: int = 128,
+    batch_size: int = 256,
     lr: float = 3e-3,
     seed: int = 0,
     verbose: bool = False,
@@ -156,7 +161,7 @@ def train_one(
             loss.backward()
             optimizer.step()
             scheduler.step()
-            total_loss += float(loss) * len(idx)
+            total_loss += loss.detach().item() * len(idx)
 
         if verbose and (epoch + 1) % 10 == 0:
             print(f"      epoch {epoch + 1}/{epochs}  loss={total_loss / len(order):.4f}")

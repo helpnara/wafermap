@@ -18,6 +18,12 @@ scipy>=1.11                 # 통계 검정, 신호처리
 scikit-learn>=1.4
 lightgbm>=4.1
 
+# 딥러닝 비교군 (M2) — CPU 전용 휠을 쓸 것
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+# PyPI 기본 휠은 CUDA 의존성까지 끌어와 약 5GB가 된다. CPU 휠은 약 200MB이며
+# Streamlit Community Cloud 배포 요건(§4.3)에도 이쪽만 들어간다.
+torch>=2.0
+
 # 통계 분석 (M3)
 statsmodels>=0.14           # BH-FDR 다중검정 보정, CMH 검정
 

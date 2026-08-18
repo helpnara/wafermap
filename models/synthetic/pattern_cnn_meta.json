@@ -1,0 +1,166 @@
+{
+  "labels": [
+    "Center",
+    "Donut",
+    "Edge-Loc",
+    "Edge-Ring",
+    "Loc",
+    "Near-full",
+    "Random",
+    "Scratch",
+    "none"
+  ],
+  "img_size": 64,
+  "source": "synthetic",
+  "report": {
+    "macro_f1": 0.9458328580718938,
+    "accuracy": 0.9898333333333333,
+    "per_class_f1": {
+      "Center": 0.9801324503311258,
+      "Donut": 1.0,
+      "Edge-Loc": 0.9615384615384616,
+      "Edge-Ring": 1.0,
+      "Loc": 0.8677685950413223,
+      "Near-full": 1.0,
+      "Random": 1.0,
+      "Scratch": 0.7070707070707071,
+      "none": 0.9959855086654265
+    },
+    "per_class_recall": {
+      "Center": 0.9932885906040269,
+      "Donut": 1.0,
+      "Edge-Loc": 0.9722222222222222,
+      "Edge-Ring": 1.0,
+      "Loc": 0.84,
+      "Near-full": 1.0,
+      "Random": 1.0,
+      "Scratch": 0.8536585365853658,
+      "none": 0.9943304007820137
+    },
+    "per_class_support": {
+      "Center": 149,
+      "Donut": 19,
+      "Edge-Loc": 180,
+      "Edge-Ring": 336,
+      "Loc": 125,
+      "Near-full": 5,
+      "Random": 30,
+      "Scratch": 41,
+      "none": 5115
+    },
+    "confusion": [
+      [
+        148,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        19,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        175,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5
+      ],
+      [
+        0,
+        0,
+        0,
+        336,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        5,
+        0,
+        0,
+        0,
+        105,
+        0,
+        0,
+        11,
+        4
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        30,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        0,
+        35,
+        3
+      ],
+      [
+        0,
+        0,
+        9,
+        0,
+        8,
+        0,
+        0,
+        12,
+        5086
+      ]
+    ],
+    "labels": [
+      "Center",
+      "Donut",
+      "Edge-Loc",
+      "Edge-Ring",
+      "Loc",
+      "Near-full",
+      "Random",
+      "Scratch",
+      "none"
+    ],
+    "n_features": 8192,
+    "train_seconds": 958.9866805076599
+  }
+}
