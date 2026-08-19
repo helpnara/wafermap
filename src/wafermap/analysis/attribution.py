@@ -34,14 +34,26 @@ import numpy as np
 import pandas as pd
 
 from wafermap.config import PARAM_ROLE, STEPS_BY_ID, is_controllable
+from wafermap.features.trace_feat import FEATURE_SUFFIXES as TRACE_FEATURE_SUFFIXES
 
 #: 분포 차이가 '크다'고 볼 Cliff's delta 기준 (관례: 0.147 작음 / 0.33 중간 / 0.474 큼)
 LARGE_EFFECT = 0.33
 
 
+#: 컬럼명에서 떼어 낼 접미사. 요약통계 + 시계열 파생 피처(M5.5-②).
+#: 긴 것부터 검사해야 `_n_excursions`가 `_std`류와 섞이지 않는다.
+_COLUMN_SUFFIXES: tuple[str, ...] = tuple(
+    sorted(("_mean", "_std", "_min", "_max") + TRACE_FEATURE_SUFFIXES, key=len, reverse=True)
+)
+
+
 def base_param_name(column: str) -> str:
-    """`chamber_pressure_mean` → `chamber_pressure` 로 접미사를 떼어 낸다."""
-    for suffix in ("_mean", "_std", "_min", "_max"):
+    """`chamber_pressure_mean` → `chamber_pressure` 로 접미사를 떼어 낸다.
+
+    시계열 파생 피처도 같은 파라미터를 가리킨다. `bath_temp_time_above`가
+    `bath_temp`로 돌아와야 "정답 파라미터를 찾았는가"를 제대로 채점할 수 있다.
+    """
+    for suffix in _COLUMN_SUFFIXES:
         if column.endswith(suffix):
             return column[: -len(suffix)]
     return column

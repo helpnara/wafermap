@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from wafermap.features.trace_feat import trace_features
 from wafermap.config import (
     CAUSE_RULES,
     CauseRule,
@@ -32,6 +33,10 @@ from wafermap.config import (
     DEFAULT_SEED,
     PRODUCT_NAME,
     PROBE_CARDS,
+    DRIFT_CAUSE_RULES,
+    DRIFT_INDUCED_SHARE,
+    SPIKE_CAUSE_RULES,
+    SPIKE_INDUCED_SHARE,
     TOUCHDOWNS_PER_WAFER,
     PROCESS_STEPS,
     STEPS_BY_ID,
@@ -48,6 +53,12 @@ from wafermap.config import (
 )
 
 #: 스텝 간 평균 소요 시간(시간). 실제 팹의 사이클 타임을 단순화한 값이다.
+#: 웨이퍼 1장 처리 시계열의 시점 수. 처리 시간 60초를 1초 간격으로 본다.
+#: 왜 촘촘해야 하나: 2~3초짜리 스파이크를 보려면 그보다 잘게 잘라야 한다.
+#: 2.5초 간격이면 3초 스파이크가 한 점에 뭉개져 노이즈와 구분되지 않는다.
+TRACE_POINTS = 60
+TRACE_SECONDS = 60.0
+
 STEP_INTERVAL_HOURS = 6.0
 #: 마지막 스텝 이후 EDS 테스트까지의 지연
 EDS_DELAY_HOURS = 12.0
@@ -257,7 +268,7 @@ def _infect(
     *,
     pattern: pd.Series,
     severity: pd.Series,
-    test_flag: np.ndarray,
+    mechanism_out: np.ndarray,
     label: str,
     target: int,
     unit_of_wafer: np.ndarray,
@@ -266,16 +277,17 @@ def _infect(
     t_min: pd.Timestamp,
     span_hours: float,
     step_id: str,
-    is_test: bool,
+    mechanism: str,
     rng: np.random.Generator,
     difficulty: SimulationDifficulty,
     excursions: list[Excursion],
 ) -> int:
     """설비 하나 × 시간 창 하나를 골라 그 안의 웨이퍼를 감염시킨다.
 
-    공정 기인과 검사 기인이 **완전히 같은 절차**를 쓰되 축만 다르다.
-      · 공정: 단위=챔버, 시각=공정 투입 시각
-      · 검사: 단위=프로브 카드, 시각=EDS 검사 시각
+세 가지 경로가 **완전히 같은 절차**를 쓰되 단위·시각·기전만 다르다.
+      · process : 단위=챔버, 시각=공정 투입 시각, 파라미터 평균이 지속 이탈
+      · test    : 단위=프로브 카드, 시각=EDS 검사 시각
+      · spike   : 단위=챔버, 시각=공정 투입 시각, **순간만** 튄다(평균 거의 불변)
 
     왜 시각 기준이 다른가 ★: 검사 이상은 검사할 때 일어난다. 공정 이상은 공정
         투입 때 일어나고 EDS에서는 66시간 뒤에 보인다(§M3 발견 3). 즉 SPC를
@@ -313,7 +325,7 @@ def _infect(
 
         pattern.iloc[hit] = label
         severity.iloc[hit] = rng.uniform(lo, hi, size=len(hit))
-        test_flag[hit] = is_test
+        mechanism_out[hit] = mechanism
         assigned += len(hit)
 
         excursions.append(
@@ -325,7 +337,7 @@ def _infect(
                 t_start=t0,
                 t_end=t1,
                 attack_rate=float(attack),
-                is_test_induced=is_test,
+                is_test_induced=mechanism == "test",
             )
         )
 
@@ -351,12 +363,13 @@ def _assign_patterns(
         5. 끝까지 배정되지 않은 웨이퍼는 'none'.
 
     Returns:
-        (패턴 Series, 심각도 Series, 검사 기인 여부 배열, 이상 사건 목록)
+        (패턴 Series, 심각도 Series, 기전 배열, 이상 사건 목록)
+        기전 배열의 값: "none" | "process" | "test" | "spike"
     """
     n = len(wafers)
     pattern = pd.Series(["none"] * n, index=wafers.index)
     severity = pd.Series(np.nan, index=wafers.index)
-    is_test_induced = np.zeros(n, dtype=bool)
+    mechanism_arr = np.full(n, "none", dtype=object)
     excursions: list[Excursion] = []
 
     lot_to_row = wafers["lot_id"].to_numpy()
@@ -387,11 +400,11 @@ def _assign_patterns(
 
         if n_test:
             n_test -= _infect(
-                pattern=pattern, severity=severity, test_flag=is_test_induced,
+                pattern=pattern, severity=severity, mechanism_out=mechanism_arr,
                 label=pat, target=n_test,
                 unit_of_wafer=card_of_wafer, units=TEST_STEP.chamber_ids,
                 times=eds_time, t_min=eds_min, span_hours=span_hours,
-                step_id=TEST_STEP.step_id, is_test=True,
+                step_id=TEST_STEP.step_id, mechanism="test",
                 rng=rng, difficulty=difficulty, excursions=excursions,
             )
             # 검사 기인이 목표를 못 채웠으면 공정 기인이 그만큼 더 가져간다
@@ -407,6 +420,7 @@ def _assign_patterns(
             pick = rng.choice(free, size=min(n_process, len(free)), replace=False)
             pattern.iloc[pick] = pat
             severity.iloc[pick] = rng.uniform(lo, hi, size=len(pick))
+            mechanism_arr[pick] = "process"
             excursions.append(
                 Excursion(
                     excursion_id=f"EXC-{len(excursions) + 1:04d}",
@@ -417,17 +431,51 @@ def _assign_patterns(
             continue
 
         step = STEPS_BY_ID[rule.step_id]
+        unit_of_wafer = route_map[step.step_id].reindex(lot_to_row).to_numpy()
+
+        # ── 스파이크 기인 몫 — 같은 스텝·같은 챔버지만 **이상의 모양**이 다르다 ──
+        # 지속형은 평균이 통째로 밀리고, 스파이크형은 2~3초만 튄다.
+        # 요약통계 분석이 후자를 놓치는지 측정하려면 둘 다 데이터에 있어야 한다.
+        n_spike = (
+            int(round(n_process * SPIKE_INDUCED_SHARE.get(pat, 0.0)))
+            if pat in SPIKE_CAUSE_RULES
+            else 0
+        )
+        n_drift = (
+            int(round(n_process * DRIFT_INDUCED_SHARE.get(pat, 0.0)))
+            if pat in DRIFT_CAUSE_RULES
+            else 0
+        )
+        for count, rules, mech in (
+            (n_spike, SPIKE_CAUSE_RULES, "spike"),
+            (n_drift, DRIFT_CAUSE_RULES, "drift"),
+        ):
+            if not count:
+                continue
+            sub_rule = rules[pat]
+            sub_step = STEPS_BY_ID[sub_rule.step_id]
+            leftover = count - _infect(
+                pattern=pattern, severity=severity, mechanism_out=mechanism_arr,
+                label=pat, target=count,
+                unit_of_wafer=route_map[sub_step.step_id].reindex(lot_to_row).to_numpy(),
+                units=sub_step.chamber_ids,
+                times=t, t_min=t_min, span_hours=span_hours,
+                step_id=sub_step.step_id, mechanism=mech,
+                rng=rng, difficulty=difficulty, excursions=excursions,
+            )
+            n_process = n_process - count + leftover
+
         _infect(
-            pattern=pattern, severity=severity, test_flag=is_test_induced,
+            pattern=pattern, severity=severity, mechanism_out=mechanism_arr,
             label=pat, target=n_process,
-            unit_of_wafer=route_map[step.step_id].reindex(lot_to_row).to_numpy(),
+            unit_of_wafer=unit_of_wafer,
             units=step.chamber_ids,
             times=t, t_min=t_min, span_hours=span_hours,
-            step_id=step.step_id, is_test=False,
+            step_id=step.step_id, mechanism="process",
             rng=rng, difficulty=difficulty, excursions=excursions,
         )
 
-    return pattern, severity, is_test_induced, excursions
+    return pattern, severity, mechanism_arr, excursions
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -479,7 +527,7 @@ def _simulate_step_fdc(
     rules: dict[str, CauseRule] | None = None,
     equip_of_wafer: np.ndarray | None = None,
     override_values: dict[str, np.ndarray] | None = None,
-    test_induced: np.ndarray | None = None,
+    mechanism: np.ndarray | None = None,
 ) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
     """스텝 1개의 FDC 요약 통계를 생성한다.
 
@@ -495,9 +543,9 @@ def _simulate_step_fdc(
     n = len(wafers)
     chambers = step.chamber_ids
     is_test_step = rules is not None
-    route_flag = (
-        test_induced if test_induced is not None else np.zeros(n, dtype=bool)
-    )
+    mech = mechanism if mechanism is not None else np.full(n, "process", dtype=object)
+    # 이 스텝의 지속형 규칙이 적용될 웨이퍼: 경로가 맞아야 한다
+    want = "test" if is_test_step else "process"
 
     # 챔버별 처리 순서 — 소모품 사용량과 드리프트 계산에 쓴다
     order = np.zeros(n, dtype=np.int64)
@@ -544,7 +592,7 @@ def _simulate_step_fdc(
             # 같은 패턴이라도 **다른 경로로 생긴 웨이퍼에는 섭동을 넣지 않는다.**
             # Edge-Ring 중 검사 기인 웨이퍼에 식각 파라미터까지 흔들어 놓으면,
             # 두 원인이 데이터상 구분 불가능해져 분석 과제 자체가 사라진다.
-            affected = (pattern == pat) & has_signal & (route_flag == is_test_step)
+            affected = (pattern == pat) & has_signal & (mech == want)
             # 위양성: 정상인데 이 파라미터가 이탈한 웨이퍼
             spurious = (pattern == "none") & is_false_positive
             targets = affected | spurious
@@ -600,47 +648,135 @@ def _simulate_step_fdc(
     )
     for k, v in out.items():
         df[k] = v
-    return df, trace_params
+
+    # ── 시계열 생성 + 파생 피처 ★ ───────────────────────────────────────
+    # 실제 FDC 시스템도 이렇게 동작한다. 장비가 **전체 시계열로부터** 요약값을
+    # 계산해 올리고, 시계열 자체는 용량 때문에 일부만 보관한다. 그래서 여기서도
+    # 전 웨이퍼의 시계열을 만들어 피처를 뽑고, 저장은 표본만 한다.
+    traces: dict[str, np.ndarray] = {}
+    t_sec = np.linspace(0.0, TRACE_SECONDS, TRACE_POINTS)
+    spike_rules = {} if is_test_step else {
+        pat: rule
+        for pat, rule in SPIKE_CAUSE_RULES.items()
+        if rule.step_id == step.step_id
+    }
+    drift_rules = {} if is_test_step else {
+        pat: rule
+        for pat, rule in DRIFT_CAUSE_RULES.items()
+        if rule.step_id == step.step_id
+    }
+
+    for pname, base in trace_params.items():
+        spec = step.param(pname)
+        # 안정화 — 목표값의 3% 아래에서 출발해 수 초 안에 자리를 잡는다.
+        #
+        # 왜 0에서 올리지 않나 ★: 예전 구현은 `base * (1 - exp(-t/6))` 이라 0에서
+        #     목표값까지 올라갔다. 세정조 온도가 웨이퍼마다 0℃에서 65℃로 오르는
+        #     장비는 없다. 조는 이미 데워져 있고, 웨이퍼가 들어오면서 살짝 식었다가
+        #     회복될 뿐이다. 0에서 올리면 상승분(65℃ ≈ 100σ)이 모든 변동을 압도해
+        #     **그래프에서도 피처에서도 스파이크가 묻힌다.**
+        settle = 1.0 - 0.03 * np.exp(-t_sec / 4.0)
+        matrix = base[:, None] * settle[None, :] + rng.normal(
+            0.0, spec.trace_noise, (n, TRACE_POINTS)
+        )
+
+        # 드리프트 — 처리 중 서서히 밀린다. 산포는 커지지만 '넘은 시간'은 0이다
+        for pat, rule in drift_rules.items():
+            pert = next(
+                (p for p in rule.perturbations if p.param == pname and p.drift_sigma), None
+            )
+            if pert is None:
+                continue
+            hit = np.flatnonzero((pattern == pat) & has_signal & (mech == "drift"))
+            if not len(hit):
+                continue
+            # 평균을 기준으로 **대칭**으로 흔든다: -D/2에서 시작해 +D/2로 끝난다.
+            #
+            # 왜 0에서 시작하지 않나 ★: 0 → +D로 밀면 60초 평균이 +D/2만큼 올라간다.
+            #     그러면 스파이크와 비교할 때 평균만으로도 둘이 갈라져(2.49σ 차이)
+            #     "모양을 구분할 수 있는가"라는 질문이 흐려진다. 한 웨이퍼 처리 중의
+            #     교정 이탈은 순 오프셋이라기보다 흔들림에 가깝기도 하다.
+            span = pert.drift_sigma * spec.sigma
+            ramp = np.linspace(-span / 2.0, span / 2.0, TRACE_POINTS)
+            matrix[hit] += ramp[None, :]
+
+        # 순간 스파이크 — 평균은 거의 안 움직이지만 시계열에는 뚜렷이 남는다
+        for pat, rule in spike_rules.items():
+            pert = next(
+                (p for p in rule.perturbations if p.param == pname and p.spike_sigma), None
+            )
+            if pert is None:
+                continue
+            hit = np.flatnonzero((pattern == pat) & has_signal & (mech == "spike"))
+            if not len(hit):
+                continue
+            width = max(1, int(round(pert.spike_seconds / TRACE_SECONDS * TRACE_POINTS)))
+            # 스파이크 시점은 웨이퍼마다 다르다 — 늘 같은 자리면 찾기가 비현실적으로 쉬워진다
+            starts = rng.integers(TRACE_POINTS // 4, TRACE_POINTS - width, len(hit))
+            for row, start in zip(hit, starts):
+                matrix[row, start:start + width] += pert.spike_sigma * spec.sigma
+
+        traces[pname] = matrix
+
+        # ── 요약통계도 **시계열에서** 다시 계산한다 ★ ────────────────────
+        # 왜: 앞의 루프는 요약값을 시계열과 따로 만들었다. 그러면 그래프에는
+        #     68.9℃ 스파이크가 보이는데 `_max`는 65.1이라고 적혀 있는,
+        #     **스스로 모순된 데이터**가 된다. 실제 장비는 시계열로부터 요약을
+        #     계산해 올리므로 그 순서를 따르는 것이 맞다.
+        #
+        #     부수 효과: 스파이크가 `_std`와 `_max`를 조금은 움직인다. 그래서
+        #     "요약통계로는 전혀 안 보인다"가 아니라 "거의 안 보인다"가 정확한
+        #     표현이 되며, 채점 결과도 그만큼 정직해진다.
+        steady = matrix[:, int(TRACE_POINTS * 0.4):]
+        df[f"{pname}_mean"] = steady.mean(axis=1)
+        df[f"{pname}_std"] = steady.std(axis=1)
+        df[f"{pname}_min"] = steady.min(axis=1)
+        df[f"{pname}_max"] = steady.max(axis=1)
+
+        for suffix, values_ in trace_features(matrix, t_sec, sigma=spec.sigma).items():
+            df[f"{pname}{suffix}"] = values_
+
+    return df, traces
 
 
 def _build_traces(
     step: ProcessStep,
     fdc: pd.DataFrame,
-    trace_params: dict[str, np.ndarray],
+    traces: dict[str, np.ndarray],
     sample_idx: np.ndarray,
-    rng: np.random.Generator,
-    n_points: int = 24,
 ) -> pd.DataFrame:
-    """선택된 웨이퍼에 대해 파라미터 시계열(trace)을 생성한다.
+    """이미 만들어 둔 시계열 행렬에서 표본 웨이퍼만 골라 저장 형태로 편다.
 
-    왜 일부만: 전 웨이퍼 × 전 파라미터 × 시점을 저장하면 용량이 폭증한다. 원인 분석
-        화면에서 trace는 '의심 웨이퍼 몇 장을 눈으로 확인'하는 용도이므로 표본이면 충분하다.
+    왜 여기서 다시 만들지 않나 ★: 예전에는 저장용 시계열을 따로 생성했다. 그러면
+        **화면에 보이는 시계열과 피처를 계산한 시계열이 다른 데이터**가 된다.
+        "피처는 스파이크가 있다는데 그래프에는 없다"는 상황이 생기고, 그건 디버깅이
+        거의 불가능하다. 같은 행렬을 쓰면 그런 어긋남이 원천적으로 없다.
+
+    왜 일부만 저장하나: 전 웨이퍼 × 전 파라미터 × 60시점을 저장하면 용량이 폭증한다.
+        요약·피처는 이미 전수로 계산했으므로, 저장분은 눈으로 확인하는 용도면 충분하다.
     """
-    if not len(sample_idx) or not trace_params:
+    if not len(sample_idx) or not traces:
         return pd.DataFrame(columns=["wafer_id", "step_id", "param", "t_sec", "value"])
 
     wafer_ids = fdc["wafer_id"].to_numpy()[sample_idx]
-    rows = []
-    for pname, values in trace_params.items():
-        spec = step.param(pname)
-        base = values[sample_idx]
-        t = np.linspace(0.0, 60.0, n_points)  # 웨이퍼 1장 처리 시간을 60초로 정규화
-        for i, wid in enumerate(wafer_ids):
-            # 안정화 구간(초반 상승) + 정상 구간 노이즈
-            ramp = 1.0 - np.exp(-t / 6.0)
-            series = base[i] * ramp + rng.normal(0.0, spec.trace_noise, n_points)
-            rows.append(
-                pd.DataFrame(
-                    {
-                        "wafer_id": wid,
-                        "step_id": step.step_id,
-                        "param": pname,
-                        "t_sec": t,
-                        "value": series,
-                    }
-                )
+    t_sec = np.linspace(0.0, TRACE_SECONDS, TRACE_POINTS)
+    n_sample = len(sample_idx)
+
+    frames = []
+    for pname, matrix in traces.items():
+        sampled = matrix[sample_idx]
+        frames.append(
+            pd.DataFrame(
+                {
+                    "wafer_id": np.repeat(wafer_ids, TRACE_POINTS),
+                    "step_id": step.step_id,
+                    "param": pname,
+                    "t_sec": np.tile(t_sec, n_sample),
+                    "value": sampled.reshape(-1),
+                }
             )
-    return pd.concat(rows, ignore_index=True)
+        )
+    return pd.concat(frames, ignore_index=True)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -691,9 +827,11 @@ def simulate(
     )
 
     # 3) 이상 사건 → 패턴 배정 (공정 기인 + 검사 기인)
-    pattern, severity, test_induced, excursions = _assign_patterns(
+    pattern, severity, mechanism_arr, excursions = _assign_patterns(
         wafers, routing, test_routing, eds_time.to_numpy(), rng, difficulty
     )
+    test_induced = mechanism_arr == "test"
+    spike_induced = mechanism_arr == "spike"
     pattern_arr = pattern.to_numpy()
     severity_arr = severity.to_numpy()
 
@@ -731,10 +869,10 @@ def simulate(
             is_false_positive,
             rng,
             difficulty,
-            test_induced=test_induced,
+            mechanism=mechanism_arr,
         )
         fdc_parts.append(fdc)
-        trace_parts.append(_build_traces(step, fdc, trace_params, trace_idx, rng))
+        trace_parts.append(_build_traces(step, fdc, trace_params, trace_idx))
 
     # ── 5-A) 검사 스텝(EDS) 이력 ────────────────────────────────────────
     # 공정 스텝과 **같은 테이블에** 넣는다. 그래야 커미널리티·SHAP이 프로브 카드를
@@ -765,12 +903,10 @@ def simulate(
         rules=TEST_CAUSE_RULES,
         equip_of_wafer=tester_of_wafer,
         override_values={"touchdown_count": touchdowns},
-        test_induced=test_induced,
+        mechanism=mechanism_arr,
     )
     fdc_parts.append(test_fdc)
-    trace_parts.append(
-        _build_traces(TEST_STEP, test_fdc, test_trace_params, trace_idx, rng)
-    )
+    trace_parts.append(_build_traces(TEST_STEP, test_fdc, test_trace_params, trace_idx))
 
     fdc_summary = pd.concat(fdc_parts, ignore_index=True)
     # 빈 프레임을 걸러낸다 — trace_noise가 0인 스텝은 trace를 만들지 않으므로
@@ -824,6 +960,10 @@ def simulate(
             # 공정이 아니라 **검사 설비**가 원인인가. 같은 맵 패턴이 두 경로로
             # 생기므로, 분석이 둘을 가려내는지 채점하려면 정답이 필요하다.
             "is_test_induced": test_induced,
+            # 이상의 **모양** — 지속형인가 순간 스파이크인가. 요약통계로 잡히는지가
+            # 갈리므로, 피처 추가의 효과를 채점하려면 정답이 필요하다.
+            "is_spike_induced": spike_induced,
+            "cause_mechanism": mechanism_arr,
         }
     )
 

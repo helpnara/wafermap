@@ -59,7 +59,7 @@ M4 결과: "그 챔버의 edge_ring_rf_hours가    → PM 주기를 단축한다
 ```python
     cols = [
         c for c in fdc_step.columns
-        if c not in ID_COLUMNS and (c.endswith("_mean") or c.endswith("_std"))
+        if c not in ID_COLUMNS and c.endswith(suffixes)
     ]
 ```
 

@@ -124,6 +124,8 @@ def test_nullable_column_accepts_na():
             "severity": [np.nan, 1.1],
             "is_confounded": [False, False],
             "is_test_induced": [False, True],
+            "is_spike_induced": [False, False],
+            "cause_mechanism": ["none", "process"],
             "is_unexplained": [False, False],
             "is_false_positive": [False, False],
         }
@@ -146,6 +148,8 @@ def test_consistency_detects_missing_fdc():
             "severity": np.nan,
             "is_confounded": False,
             "is_test_induced": False,
+            "is_spike_induced": False,
+            "cause_mechanism": "process",
             "is_unexplained": False,
             "is_false_positive": False,
         }
@@ -168,6 +172,8 @@ def test_consistency_detects_die_pass_exceeding_total():
             "severity": np.nan,
             "is_confounded": False,
             "is_test_induced": False,
+            "is_spike_induced": False,
+            "cause_mechanism": "process",
             "is_unexplained": False,
             "is_false_positive": False,
         }

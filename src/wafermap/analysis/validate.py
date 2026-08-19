@@ -127,11 +127,28 @@ def _rate(flags: list[bool]) -> float:
     return float(np.mean(flags)) if flags else 0.0
 
 
+def true_steps(ground_truth: pd.DataFrame, pattern: str) -> tuple[str, ...]:
+    """이 패턴의 원인이 될 수 있는 **모든** 스텝.
+
+    왜 하나가 아닌가 ★: 같은 패턴이 여러 경로로 생긴다(공정/검사/스파이크/드리프트).
+        Edge-Ring은 식각 챔버 마모로도, 프로브 카드 마모로도 나온다. 예전 구현은
+        정답지의 **첫 행**에서 스텝을 꺼냈는데, 그러면 그 웨이퍼가 어느 경로였는지에
+        따라 정답이 바뀌었다. 실제로 Edge-Ring의 정답이 T010으로 잡혀, 식각 챔버를
+        올바르게 지목한 분석이 오답 처리됐다.
+    """
+    rows = ground_truth[ground_truth["pattern_label"] == pattern]
+    steps = rows["true_root_step"].dropna()
+    return tuple(sorted(set(steps.astype(str))))
+
+
 def true_causes(ground_truth: pd.DataFrame, pattern: str) -> tuple[str | None, tuple[str, ...]]:
-    """정답지에서 해당 패턴의 원인 스텝과 챔버를 꺼낸다.
+    """정답지에서 해당 패턴의 대표 원인 스텝과 원인 챔버들을 꺼낸다.
+
+    대표 스텝은 **가장 많은 웨이퍼를 설명하는** 스텝이다. 여러 스텝이 정답일 수
+    있으므로, 적중 판정에는 `true_steps()`를 함께 쓴다.
 
     Returns:
-        (원인 스텝, 원인 챔버들). 원인이 없는 패턴(none/Random)은 (None, ())
+        (대표 원인 스텝, 원인 챔버들). 원인이 없는 패턴(none/Random)은 (None, ())
     """
     rows = ground_truth[ground_truth["pattern_label"] == pattern]
     if rows.empty:
@@ -142,7 +159,7 @@ def true_causes(ground_truth: pd.DataFrame, pattern: str) -> tuple[str | None, t
         return None, ()
 
     chambers = rows["true_root_equip"].dropna()
-    return str(steps.iloc[0]), tuple(sorted(set(chambers)))
+    return str(steps.mode().iloc[0]), tuple(sorted(set(chambers)))
 
 
 def score_pattern(
@@ -180,7 +197,8 @@ def score_pattern(
         top1_chamber=str(top["chamber_id"]),
         top1_step=str(top["step_id"]),
         top1_chamber_hit=str(top["chamber_id"]) in true_chambers,
-        top1_step_hit=str(top["step_id"]) == true_step,
+        # 여러 경로가 정답일 수 있으므로 **집합** 포함으로 판정한다
+        top1_step_hit=str(top["step_id"]) in true_steps(ground_truth, pattern),
         top3_chamber_hit=bool(top3 & set(true_chambers)),
         n_significant=int(ranking["significant"].sum()),
         top1_odds_ratio=float(top["odds_ratio"]),
@@ -673,3 +691,279 @@ def score_equipment_axis(
             )
         )
     return report
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# M5.5-② 시계열 파생 피처 채점 — 요약통계가 놓치는 것을 잡는가
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ShapeScore:
+    """이상의 **모양**을 구분할 수 있는가 — 스파이크 vs 드리프트.
+
+    왜 이 형태로 재나 ★★: 처음에는 "요약통계로는 스파이크를 아예 못 본다"를 재려
+        했다. 그런데 요약값을 시계열에서 제대로 계산하자 `std`가 스파이크를 잘
+        잡았다(AUC 0.89). 첨부 문서가 말한 것은 **평균**이고, 그건 실제로 거의
+        안 움직인다(0.35σ). 산포까지 못 본다는 것은 사실이 아니었다.
+
+        그래서 질문을 바꿨다. 스파이크와 드리프트는 산포가 같도록 맞춰 두면
+        **요약통계에서 사실상 구분되지 않는다.** 그런데 원인도 조치도 전혀 다르다.
+        시계열 피처의 진짜 값어치는 검출이 아니라 **무엇이 일어났는지 말해 주는 것**이다.
+
+    Attributes:
+        param: 대상 파라미터
+        n_spike, n_drift: 두 기전의 웨이퍼 수
+        best_summary, auc_summary: 요약통계 중 가장 잘 구분한 컬럼과 AUC
+        best_trace, auc_trace: 시계열 피처 중 가장 잘 구분한 컬럼과 AUC
+        mean_gap_sigma, std_gap_sigma: 두 기전의 평균·산포 차이 (σ 단위)
+    """
+
+    param: str
+    n_spike: int
+    n_drift: int
+    best_summary: str
+    auc_summary: float
+    best_trace: str
+    auc_trace: float
+    mean_gap_sigma: float
+    std_gap_sigma: float
+
+    def describe(self) -> str:
+        return (
+            f"{self.param:<12} 스파이크 {self.n_spike}장 vs 드리프트 {self.n_drift}장\n"
+            f"    두 기전의 요약값 차이 : 평균 {self.mean_gap_sigma:.2f}σ · "
+            f"산포 {self.std_gap_sigma:.2f}σ  (맞춰 둔 값)\n"
+            f"    요약통계 최고 구분력  : AUC {self.auc_summary:.3f}  ({self.best_summary})\n"
+            f"    시계열 피처 최고      : AUC {self.auc_trace:.3f}  ({self.best_trace})"
+        )
+
+
+@dataclass(frozen=True)
+class TraceFeatureScore:
+    """기전별로 요약통계만 썼을 때와 시계열 피처를 더했을 때를 비교한다.
+
+    Attributes:
+        pattern: 대상 패턴
+        mechanism: 이상의 모양 ("process"=지속형 / "spike"=순간형)
+        n_case: 해당 기전의 불량 장수
+        auc_summary, auc_trace: 두 조건의 판별 AUC
+        top_summary, top_trace: 두 조건의 SHAP 1위 파라미터
+        truth_params: 정답 파라미터 목록
+        n_features_summary, n_features_trace: 쓴 피처 수
+    """
+
+    pattern: str
+    mechanism: str
+    n_case: int
+    auc_summary: float
+    auc_trace: float
+    top_summary: str | None
+    top_trace: str | None
+    truth_params: tuple[str, ...]
+    n_features_summary: int
+    n_features_trace: int
+
+    @staticmethod
+    def _hit(column: str | None, truth: tuple[str, ...]) -> bool:
+        if not column:
+            return False
+        from wafermap.analysis.attribution import base_param_name
+
+        return base_param_name(column) in truth
+
+    @property
+    def hit_summary(self) -> bool:
+        return self._hit(self.top_summary, self.truth_params)
+
+    @property
+    def hit_trace(self) -> bool:
+        return self._hit(self.top_trace, self.truth_params)
+
+    @property
+    def auc_gain(self) -> float:
+        return self.auc_trace - self.auc_summary
+
+    def describe(self) -> str:
+        def mark(hit: bool) -> str:
+            return "✅" if hit else "❌"
+
+        return (
+            f"{self.pattern:<10}{self.mechanism:<9}불량 {self.n_case:>3}장  "
+            f"요약만 AUC {self.auc_summary:.3f} {mark(self.hit_summary)}"
+            f"{str(self.top_summary or '—'):<24}"
+            f"→ +trace AUC {self.auc_trace:.3f} {mark(self.hit_trace)}"
+            f"{str(self.top_trace or '—')}"
+        )
+
+
+@dataclass
+class TraceFeatureReport:
+    scores: list[TraceFeatureScore] = field(default_factory=list)
+    shapes: list[ShapeScore] = field(default_factory=list)
+
+    def summary(self) -> str:
+        lines = [f"대상: {len(self.scores)}건 (패턴 × 기전)", ""]
+        for mechanism in ("process", "spike"):
+            group = [s for s in self.scores if s.mechanism == mechanism]
+            if not group:
+                continue
+            label = "지속형" if mechanism == "process" else "순간 스파이크형"
+            hit_s = _rate([s.hit_summary for s in group])
+            hit_t = _rate([s.hit_trace for s in group])
+            auc_s = float(np.mean([s.auc_summary for s in group]))
+            auc_t = float(np.mean([s.auc_trace for s in group]))
+            lines += [
+                f"  [{label}]",
+                f"    요약통계만    : AUC {auc_s:.3f}  원인 파라미터 적중 {hit_s:.0%}",
+                f"    + trace 피처  : AUC {auc_t:.3f}  원인 파라미터 적중 {hit_t:.0%}",
+                f"    AUC 변화      : {auc_t - auc_s:+.3f}",
+                "",
+            ]
+
+        if self.shapes:
+            lines.append("  [이상의 모양 구분 — 스파이크 vs 드리프트]")
+            for shape in self.shapes:
+                lines.append("    " + shape.describe().replace("\n", "\n    "))
+            gain = float(np.mean([s.auc_trace - s.auc_summary for s in self.shapes]))
+            lines += [
+                "",
+                f"    구분력 향상: {gain:+.3f}",
+                "",
+                "  📖 검출력 차이는 크지 않다. 진짜 차이는 **해석**이다.",
+                "     `min`이 낮다는 사실은 무엇을 고쳐야 하는지 말해 주지 않는다.",
+                "     `time_above 2.2초 · n_excursions 1`은 순간 과열이라 인터락을 걸라는 뜻이고,",
+                "     `slope 0.079`는 서서히 밀린다는 뜻이라 센서 교정을 하라는 뜻이다.",
+                "     조치가 갈리는 지점이 여기다.",
+            ]
+        return "\n".join(lines)
+
+
+def score_trace_features(
+    wafer_master: pd.DataFrame,
+    fdc_summary: pd.DataFrame,
+    ground_truth: pd.DataFrame,
+    *,
+    min_case: int = 20,
+) -> TraceFeatureReport:
+    """기전별로 시계열 피처의 효과를 채점한다 ★.
+
+    왜 기전을 나눠서 보나: 전체 평균만 보면 효과가 희석된다. 시계열 피처는
+        **순간 스파이크형에만** 도움이 되고 지속형에는 영향이 없어야 정상이다.
+        지속형에서도 AUC가 올라간다면 그건 피처를 늘려 과적합된 것일 수 있다.
+
+    Returns:
+        TraceFeatureReport
+    """
+    from wafermap.analysis import attribution
+    from wafermap.config import CAUSE_RULES, SPIKE_CAUSE_RULES
+    from wafermap.models import cause_model
+
+    report = TraceFeatureReport()
+    control = list(ground_truth.loc[ground_truth["pattern_label"] == "none", "wafer_id"])
+
+    for pattern in sorted(SPIKE_CAUSE_RULES):
+        sub = ground_truth[ground_truth["pattern_label"] == pattern]
+        for mechanism, rules in (("process", CAUSE_RULES), ("spike", SPIKE_CAUSE_RULES)):
+            case = list(sub.loc[sub["cause_mechanism"] == mechanism, "wafer_id"])
+            if len(case) < min_case:
+                continue
+            rule = rules[pattern]
+            truth = tuple(p.param for p in rule.perturbations)
+
+            fitted = {}
+            for key, suffixes in (
+                ("summary", cause_model.DEFAULT_SUFFIXES),
+                ("trace", cause_model.TRACE_SUFFIXES),
+            ):
+                result = cause_model.fit(
+                    fdc_summary, rule.step_id, pattern, case, control, suffixes=suffixes
+                )
+                evidence = attribution.build_evidence(
+                    result, fdc_summary, case, control, top_n=3
+                )
+                fitted[key] = (result, evidence[0].column if evidence else None)
+
+            report.scores.append(
+                TraceFeatureScore(
+                    pattern=pattern,
+                    mechanism=mechanism,
+                    n_case=len(case),
+                    auc_summary=fitted["summary"][0].auc,
+                    auc_trace=fitted["trace"][0].auc,
+                    top_summary=fitted["summary"][1],
+                    top_trace=fitted["trace"][1],
+                    truth_params=truth,
+                    n_features_summary=len(fitted["summary"][0].feature_names),
+                    n_features_trace=len(fitted["trace"][0].feature_names),
+                )
+            )
+
+        report.shapes.extend(_score_shape(fdc_summary, sub, pattern, min_case=min_case))
+    return report
+
+
+def _score_shape(
+    fdc_summary: pd.DataFrame,
+    sub: pd.DataFrame,
+    pattern: str,
+    *,
+    min_case: int,
+) -> list[ShapeScore]:
+    """스파이크와 드리프트를 갈라낼 수 있는지 **원인 파라미터 하나로만** 잰다.
+
+    왜 파라미터를 하나로 묶나 ★: 스텝의 전 파라미터를 넣고 모델을 돌리면 AUC가
+        0.98까지 나온다. 그런데 그건 모양을 구분한 게 아니다. 두 기전은 서로 다른
+        이상 사건에서 나왔으므로 **챔버·시간대가 달라** 무관한 파라미터로도 갈린다.
+        "시계열 모양을 구분할 수 있는가"를 물으려면 그 파라미터만 봐야 한다.
+
+    왜 단변량 AUC인가: 컬럼 하나하나가 얼마나 구분하는지 보여야 "어느 피처가
+        일을 하는지"가 드러난다. 모델 AUC 한 숫자로는 알 수 없다.
+    """
+    from sklearn.metrics import roc_auc_score
+
+    from wafermap.config import DRIFT_CAUSE_RULES
+    from wafermap.features.trace_feat import FEATURE_SUFFIXES
+
+    rule = DRIFT_CAUSE_RULES.get(pattern)
+    if rule is None:
+        return []
+    param = rule.perturbations[0].param
+
+    spike = set(sub.loc[sub["cause_mechanism"] == "spike", "wafer_id"])
+    drift = set(sub.loc[sub["cause_mechanism"] == "drift", "wafer_id"])
+    if len(spike) < min_case or len(drift) < min_case:
+        return []
+
+    step = fdc_summary[fdc_summary["step_id"] == rule.step_id]
+    rows = step[step["wafer_id"].isin(spike | drift)]
+    y = rows["wafer_id"].isin(spike).astype(int).to_numpy()
+
+    best = {"summary": (0.0, ""), "trace": (0.0, "")}
+    for column in [c for c in rows.columns if c.startswith(f"{param}_")]:
+        values = rows[column].to_numpy(dtype=float)
+        # 방향을 모르므로 뒤집은 쪽도 본다 (구분력의 절대 크기가 관심사다)
+        auc = max(roc_auc_score(y, values), roc_auc_score(y, -values))
+        kind = "trace" if column.endswith(FEATURE_SUFFIXES) else "summary"
+        if auc > best[kind][0]:
+            best[kind] = (auc, column)
+
+    def gap(suffix: str) -> float:
+        a = rows.loc[rows["wafer_id"].isin(spike), f"{param}{suffix}"]
+        b = rows.loc[rows["wafer_id"].isin(drift), f"{param}{suffix}"]
+        pooled = float(np.sqrt((a.var() + b.var()) / 2)) or 1.0
+        return float(abs(a.mean() - b.mean()) / pooled)
+
+    return [
+        ShapeScore(
+            param=param,
+            n_spike=len(spike),
+            n_drift=len(drift),
+            best_summary=best["summary"][1],
+            auc_summary=best["summary"][0],
+            best_trace=best["trace"][1],
+            auc_trace=best["trace"][0],
+            mean_gap_sigma=gap("_mean"),
+            std_gap_sigma=gap("_std"),
+        )
+    ]

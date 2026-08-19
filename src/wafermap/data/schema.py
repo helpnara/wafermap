@@ -125,6 +125,9 @@ GROUND_TRUTH = TableSchema(
         Column("is_confounded", "bool"),
         # 공정이 아니라 검사 설비가 원인인가 — 같은 맵 패턴의 두 번째 경로
         Column("is_test_induced", "bool"),
+        # 이상의 모양이 순간 스파이크인가 — 요약통계로 잡히는지가 갈린다
+        Column("is_spike_induced", "bool"),
+        Column("cause_mechanism", "str"),
         Column("is_unexplained", "bool"),
         Column("is_false_positive", "bool"),
     ),

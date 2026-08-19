@@ -32,6 +32,10 @@ import numpy as np
 import pandas as pd
 
 #: FDC 요약 테이블에서 파라미터가 아닌 식별 컬럼
+from wafermap.features.trace_feat import (
+    FEATURE_SUFFIXES as TRACE_FEATURE_SUFFIXES,
+)
+
 ID_COLUMNS = ("wafer_id", "step_id", "step_name", "equip_id", "chamber_id",
               "recipe_id", "run_time")
 
@@ -114,7 +118,16 @@ class CauseModelResult:
         return "\n".join(lines)
 
 
-def parameter_columns(fdc_step: pd.DataFrame) -> list[str]:
+#: 기본 피처 접미사. 요약통계 중 대표값과 안정성만 쓴다.
+DEFAULT_SUFFIXES: tuple[str, ...] = ("_mean", "_std")
+
+#: 시계열 파생 피처까지 포함한 확장 집합 (M5.5-②)
+TRACE_SUFFIXES: tuple[str, ...] = DEFAULT_SUFFIXES + TRACE_FEATURE_SUFFIXES
+
+
+def parameter_columns(
+    fdc_step: pd.DataFrame, suffixes: tuple[str, ...] = DEFAULT_SUFFIXES
+) -> list[str]:
     """FDC 테이블에서 파라미터 컬럼만 골라낸다.
 
     왜 `_mean`만 쓰나: 한 스텝의 요약 통계는 `<param>_mean/_std/_min/_max` 4종이 있다.
@@ -124,10 +137,15 @@ def parameter_columns(fdc_step: pd.DataFrame) -> list[str]:
 
         `_mean`이 대표성이 가장 높으므로 이것만 쓴다. `_std`는 '안정성'이라는
         다른 정보를 담으므로 함께 넣는다.
+
+    Args:
+        fdc_step: 한 스텝의 FDC 테이블
+        suffixes: 쓸 피처 접미사. `TRACE_SUFFIXES`를 주면 시계열 파생 피처까지
+            포함한다 — 순간 스파이크처럼 요약통계로는 안 보이는 이상을 잡으려면 필요하다.
     """
     cols = [
         c for c in fdc_step.columns
-        if c not in ID_COLUMNS and (c.endswith("_mean") or c.endswith("_std"))
+        if c not in ID_COLUMNS and c.endswith(suffixes)
     ]
     # 값이 하나뿐인 컬럼은 정보가 없다 (분할이 불가능해 모델이 무시한다)
     return [c for c in cols if fdc_step[c].nunique(dropna=True) > 1]
@@ -140,6 +158,7 @@ def build_matrix(
     control_ids: list[str] | tuple[str, ...],
     *,
     chamber_id: str | None = None,
+    suffixes: tuple[str, ...] = DEFAULT_SUFFIXES,
 ) -> tuple[pd.DataFrame, np.ndarray]:
     """특정 스텝의 FDC 파라미터로 학습 행렬을 만든다.
 
@@ -162,7 +181,7 @@ def build_matrix(
     df = df[df["wafer_id"].isin(case_set | control_set)].copy()
 
     y = df["wafer_id"].isin(case_set).to_numpy().astype(int)
-    X = df[parameter_columns(df)].astype("float32")
+    X = df[parameter_columns(df, suffixes)].astype("float32")
     return X, y
 
 
@@ -179,6 +198,7 @@ def fit(
     num_boost_round: int = 200,
     params: dict[str, object] | None = None,
     max_background: int = 500,
+    suffixes: tuple[str, ...] = DEFAULT_SUFFIXES,
 ) -> CauseModelResult:
     """원인 규명 모델을 학습하고 SHAP 기여도를 계산한다.
 
@@ -204,6 +224,7 @@ def fit(
         num_boost_round: 부스팅 라운드
         params: LightGBM 파라미터
         max_background: SHAP 계산에 쓸 최대 표본 수 (속도 조절)
+        suffixes: 쓸 피처 접미사 (`TRACE_SUFFIXES`면 시계열 파생 피처 포함)
 
     Returns:
         CauseModelResult
@@ -216,7 +237,10 @@ def fit(
     from sklearn.metrics import roc_auc_score
     from sklearn.model_selection import StratifiedKFold
 
-    X, y = build_matrix(fdc_summary, step_id, case_ids, control_ids, chamber_id=chamber_id)
+    X, y = build_matrix(
+        fdc_summary, step_id, case_ids, control_ids,
+        chamber_id=chamber_id, suffixes=suffixes,
+    )
 
     n_case, n_control = int(y.sum()), int((1 - y).sum())
     if n_case < 10 or n_control < 10:
