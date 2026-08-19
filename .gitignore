@@ -26,7 +26,13 @@ htmlcov/
 # OS / Editor
 .DS_Store
 .idea/
-.vscode/
+
+# VS Code — 팀 공용 설정(인터프리터 경로, 권장 확장, 실행 구성)은 커밋한다.
+# 개인 설정(테마·창 배치 등)은 각자 사용자 설정에 두면 되므로 나머지는 제외.
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
 
 # Streamlit
 .streamlit/secrets.toml

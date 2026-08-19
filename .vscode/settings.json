@@ -1,0 +1,29 @@
+{
+  // 가상환경 인터프리터 — 이 설정이 있으면 VS Code가 .venv를 자동으로 잡는다
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+
+  // src 레이아웃 — 이게 없으면 에디터가 wafermap 임포트를 못 찾아 빨간 줄을 긋는다
+  "python.analysis.extraPaths": ["${workspaceFolder}/src"],
+  "python.analysis.autoImportCompletions": true,
+
+  // 테스트
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": ["tests"],
+
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": false,
+    "editor.codeActionsOnSave": { "source.organizeImports": "explicit" },
+    "editor.rulers": [100]
+  },
+
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true
+  },
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true
+}
