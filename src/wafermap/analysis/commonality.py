@@ -291,6 +291,197 @@ def analyze(
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# 원인이 둘 이상일 때 — 껍질 벗기기(peeling)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class CauseLayer:
+    """섞여 있던 원인 하나를 벗겨 낸 결과.
+
+    Attributes:
+        rank: 몇 번째로 벗겨 낸 원인인가 (1부터)
+        step_id, chamber_id, equip_id: 지목된 설비
+        odds_ratio, p_adj: 그 층에서의 검정 결과
+        n_case_before: 이 층을 분석할 때 남아 있던 불량 웨이퍼 수
+        n_explained: 이 설비를 지난 불량 웨이퍼 수 (= 다음 층에서 제외됨)
+        is_test_equipment: 공정 설비가 아니라 **검사 설비**인가
+    """
+
+    rank: int
+    step_id: str
+    chamber_id: str
+    equip_id: str
+    odds_ratio: float
+    p_adj: float
+    n_case_before: int
+    n_explained: int
+    is_test_equipment: bool
+
+    def describe(self) -> str:
+        kind = "검사" if self.is_test_equipment else "공정"
+        return (
+            f"{self.rank}층 [{kind}] {self.step_id} {self.chamber_id}  "
+            f"OR {self.odds_ratio:6.2f}  p_adj {self.p_adj:.3g}  "
+            f"불량 {self.n_explained}/{self.n_case_before}장 설명"
+        )
+
+
+def peel(
+    fdc_summary: pd.DataFrame,
+    case_ids: list[str] | tuple[str, ...],
+    control_ids: list[str] | tuple[str, ...],
+    *,
+    wafer_master: pd.DataFrame | None = None,
+    unit: str = "lot",
+    max_layers: int = 3,
+    min_cases: int = 15,
+    min_odds_ratio: float = 1.5,
+) -> list[CauseLayer]:
+    """원인을 하나씩 벗겨 내며 반복 분석한다 ★★.
+
+    왜 필요한가: 커미널리티는 **불량군 전체가 한 가지 원인에서 왔다고 가정**한다.
+        그런데 같은 맵 패턴이 두 경로로 생기면(식각 챔버 마모 / 프로브 카드 마모)
+        불량군은 두 집단의 혼합이 된다. 그러면 각 원인은 자기 몫의 웨이퍼만
+        설명하므로 **양쪽 신호가 다 같이 희석된다.** 실제로 이 프로젝트에서도
+        Edge-Ring의 1위 OR이 6.4에서 3.2로 반토막 났고, Loc의 검사 기인 원인은
+        상위 6위 안에 들지도 못했다.
+
+    어떻게: 현업 엔지니어가 하는 것과 같다 — **1위를 찾고, 그 설비를 지난 불량
+        웨이퍼를 빼고, 남은 것으로 다시 본다.** 첫 원인이 설명하던 웨이퍼가
+        사라지면 가려져 있던 두 번째 원인이 드러난다.
+
+    언제 멈추나:
+        · 남은 불량이 `min_cases` 미만 — 통계적으로 더 볼 수 없다
+        · 1위 OR이 `min_odds_ratio` 미만 — 남은 것은 신호가 아니라 잡음이다
+        · `max_layers` 도달
+
+    ⚠️ 한계 1 — **과잉 제거.** 모든 웨이퍼는 모든 스텝을 지나므로, 챔버 하나를
+        벗겨 내면 그 챔버가 실제로 유발하지 않은 웨이퍼까지 대량으로 빠진다.
+        스텝의 챔버가 적을수록 심하다. 실측: 포토(스캐너 3대)에서 2개 층을 벗기자
+        불량이 125장 → 0장이 되어, 남아 있던 **검사 기인 원인(PC-05)이 드러날
+        기회조차 사라졌다.** 챔버가 3대 이하인 스텝에서는 이 방법을 믿지 말 것.
+
+    ⚠️ 한계 2: 벗겨 낸 층이 **진짜 독립된 원인이라는 보장은 없다.** 교락된 설비를
+        1층으로 잘못 뽑으면 2층부터 전부 어긋난다. 각 층을 `stratified_test`로
+        검증하고, 무엇보다 공정 엔지니어가 물리 기전으로 납득할 수 있어야 한다.
+
+    → 원인이 **공정이냐 검사냐**를 가리는 것이 목적이라면 `by_axis()`를 쓰는 편이
+      안전하다. 축을 나눠 각각의 1위를 보면 한쪽이 다른 쪽을 가릴 수 없다.
+
+    Returns:
+        벗겨 낸 순서대로의 `CauseLayer` 목록
+    """
+    from wafermap.config import TEST_STEP_ID
+
+    remaining = list(case_ids)
+    remaining_controls = list(control_ids)
+    layers: list[CauseLayer] = []
+
+    for rank in range(1, max_layers + 1):
+        if len(remaining) < min_cases:
+            break
+
+        ranking = analyze(
+            fdc_summary, remaining, remaining_controls,
+            wafer_master=wafer_master, unit=unit,
+        )
+        if ranking.empty:
+            break
+
+        top = ranking.iloc[0]
+        if float(top["odds_ratio"]) < min_odds_ratio:
+            break
+
+        # 이 설비를 지난 웨이퍼를 찾아 다음 층에서 제외한다.
+        #
+        # ★ 정상군에서도 똑같이 빼야 한다. 불량군에서만 빼면 남은 불량은 정의상
+        #   그 스텝의 다른 챔버만 지났는데 정상군은 여전히 모든 챔버에 퍼져 있어,
+        #   나머지 챔버의 OR이 기계적으로 부풀려진다. 양쪽을 함께 빼야 "그 설비를
+        #   지나지 않은 웨이퍼들"이라는 **같은 조건**에서 비교하게 된다.
+        #   (실측: Loc 2층 OR 15.95 → 8.47로 내려갔다.)
+        through = set(
+            fdc_summary[
+                (fdc_summary["step_id"] == top["step_id"])
+                & (fdc_summary["chamber_id"] == top["chamber_id"])
+            ]["wafer_id"]
+        )
+        explained = set(remaining) & through
+
+        layers.append(
+            CauseLayer(
+                rank=rank,
+                step_id=str(top["step_id"]),
+                chamber_id=str(top["chamber_id"]),
+                equip_id=str(top["equip_id"]),
+                odds_ratio=float(top["odds_ratio"]),
+                p_adj=float(top["p_adj"]),
+                n_case_before=len(remaining),
+                n_explained=len(explained),
+                is_test_equipment=str(top["step_id"]) == TEST_STEP_ID,
+            )
+        )
+
+        if not explained:
+            break
+        remaining = [w for w in remaining if w not in through]
+        remaining_controls = [w for w in remaining_controls if w not in through]
+
+    return layers
+
+
+def by_axis(
+    fdc_summary: pd.DataFrame,
+    case_ids: list[str] | tuple[str, ...],
+    control_ids: list[str] | tuple[str, ...],
+    *,
+    wafer_master: pd.DataFrame | None = None,
+    unit: str = "lot",
+) -> pd.DataFrame:
+    """공정 설비와 검사 설비를 **각각** 1위까지 좁혀 나란히 보여준다 ★★.
+
+    왜 축을 나누나: 단일 랭킹에서는 표본이 많은 쪽이 이긴다. Loc에서 실제로
+        공정 기인 94장 / 검사 기인 31장이었는데, 통합 랭킹에서 진짜 검사 원인
+        PC-05는 **43개 중 8위**로 밀렸다. 상위 5개만 보는 실무 관행에서는
+        존재하지 않는 것과 같다. 축을 나누면 표본이 적은 쪽도 자기 축에서는
+        1위로 올라와 **최소한 눈에 띈다.**
+
+    왜 이것이 중요한가: 두 축의 조치가 완전히 다르다. 프로브 카드는 세정에 수 시간,
+        공정 챔버 PM은 수 일이 걸린다. 검사 문제를 공정 탓으로 돌리면 멀쩡한 챔버를
+        세우고도 불량이 계속된다. 최소한 **두 후보를 같이 놓고 비교**할 수 있어야 한다.
+
+    Returns:
+        축(process/test)별 1위 한 줄씩. `axis`, `axis_ko`, `rank_overall` 컬럼이 추가된다.
+        해당 축에 후보가 없으면 그 행은 생략된다.
+    """
+    from wafermap.config import TEST_STEP_ID
+
+    ranking = analyze(
+        fdc_summary, case_ids, control_ids, wafer_master=wafer_master, unit=unit
+    ).reset_index(drop=True)
+    if ranking.empty:
+        return ranking
+
+    ranking["rank_overall"] = ranking.index + 1
+    is_test = ranking["step_id"] == TEST_STEP_ID
+
+    rows = []
+    for axis, axis_ko, mask in (
+        ("process", "공정 설비", ~is_test),
+        ("test", "검사 설비", is_test),
+    ):
+        subset = ranking[mask]
+        if subset.empty:
+            continue
+        top = subset.iloc[0].to_dict()
+        top["axis"] = axis
+        top["axis_ko"] = axis_ko
+        rows.append(top)
+
+    return pd.DataFrame(rows)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # 교락 판별 — CMH 층화 검정
 # ──────────────────────────────────────────────────────────────────────────
 

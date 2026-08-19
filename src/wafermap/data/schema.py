@@ -68,6 +68,11 @@ WAFER_MASTER = TableSchema(
         Column("tech_node", "str"),
         Column("fab_in_time", "datetime"),
         Column("eds_time", "datetime"),
+        # 검사 설비 — 불량이 공정이 아니라 검사에서 왔을 가능성을 판별하는 축(§2.5-A).
+        # 실측 WM-811K에는 없는 정보라 nullable로 둔다.
+        Column("tester_id", "str", nullable=True),
+        Column("probe_card_id", "str", nullable=True),
+        Column("probe_touchdown", "int", nullable=True, min_value=0),
         Column("die_total", "int", min_value=1),
         Column("die_pass", "int", min_value=0),
         Column("yield_pct", "float", min_value=0.0, max_value=100.0),
@@ -118,6 +123,8 @@ GROUND_TRUTH = TableSchema(
         Column("true_root_params", "list", nullable=True),
         Column("severity", "float", nullable=True, min_value=0.0),
         Column("is_confounded", "bool"),
+        # 공정이 아니라 검사 설비가 원인인가 — 같은 맵 패턴의 두 번째 경로
+        Column("is_test_induced", "bool"),
         Column("is_unexplained", "bool"),
         Column("is_false_positive", "bool"),
     ),

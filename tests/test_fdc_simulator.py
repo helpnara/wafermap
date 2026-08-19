@@ -14,7 +14,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from wafermap.config import CAUSE_RULES, PATTERN_LABELS, STEPS_BY_ID, WM811K_LABEL_COUNTS
+from wafermap.config import (
+    CAUSE_RULES,
+    PATTERN_LABELS,
+    STEPS_BY_ID,
+    TEST_CAUSE_RULES,
+    WM811K_LABEL_COUNTS,
+)
 from wafermap.data import schema
 from wafermap.data.fdc_simulator import simulate
 
@@ -216,9 +222,14 @@ def test_equipment_baseline_differs_between_chambers(sim):
 
 
 def test_ground_truth_root_matches_cause_rules(sim):
-    """정답지의 원인 스텝이 CAUSE_RULES와 일치해야 한다."""
+    """정답지의 원인 스텝이 규칙표와 일치해야 한다.
+
+    같은 패턴이 **두 경로**로 생긴다(공정 / 검사). `is_test_induced`에 따라
+    대조할 규칙표가 달라진다 — M5.5-①에서 추가된 구분이다.
+    """
     for _, row in sim.ground_truth.sample(200, random_state=0).iterrows():
-        expected = CAUSE_RULES[row["pattern_label"]].step_id
+        rules = TEST_CAUSE_RULES if row["is_test_induced"] else CAUSE_RULES
+        expected = rules[row["pattern_label"]].step_id
         actual = row["true_root_step"]
         assert (actual == expected) or (expected is None and actual is None)
 

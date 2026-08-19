@@ -24,6 +24,10 @@ def _valid_master(n=5) -> pd.DataFrame:
             "tech_node": ["1z-nm"] * n,
             "fab_in_time": pd.date_range("2026-01-01", periods=n, freq="h"),
             "eds_time": pd.date_range("2026-01-05", periods=n, freq="h"),
+            # 검사 설비 축 (M5.5-①)
+            "tester_id": ["ATE-01"] * n,
+            "probe_card_id": ["PC-03"] * n,
+            "probe_touchdown": np.full(n, 12_500, dtype="int64"),
             "die_total": np.full(n, 1584, dtype="int64"),
             "die_pass": np.full(n, 1500, dtype="int64"),
             "yield_pct": np.full(n, 94.7),
@@ -119,6 +123,7 @@ def test_nullable_column_accepts_na():
             "true_root_params": [None, ["down_force"]],
             "severity": [np.nan, 1.1],
             "is_confounded": [False, False],
+            "is_test_induced": [False, True],
             "is_unexplained": [False, False],
             "is_false_positive": [False, False],
         }
@@ -140,6 +145,7 @@ def test_consistency_detects_missing_fdc():
             "true_root_params": None,
             "severity": np.nan,
             "is_confounded": False,
+            "is_test_induced": False,
             "is_unexplained": False,
             "is_false_positive": False,
         }
@@ -161,6 +167,7 @@ def test_consistency_detects_die_pass_exceeding_total():
             "true_root_params": None,
             "severity": np.nan,
             "is_confounded": False,
+            "is_test_induced": False,
             "is_unexplained": False,
             "is_false_positive": False,
         }

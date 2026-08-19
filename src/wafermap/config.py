@@ -165,6 +165,9 @@ class ProcessStep:
     chambers_per_equip: int
     params: tuple[ParamSpec, ...]
     note: str = ""
+    #: 검정 단위를 직접 지정할 때 쓴다(비우면 설비×챔버로 자동 생성).
+    #: EDS 검사 스텝은 단위가 챔버가 아니라 **프로브 카드**라서 이 필드가 필요하다.
+    explicit_units: tuple[str, ...] = ()
 
     @property
     def chamber_ids(self) -> tuple[str, ...]:
@@ -172,7 +175,12 @@ class ProcessStep:
 
         왜: 커미널리티 분석(M3)의 검정 단위가 설비가 아니라 **챔버**다. 같은 설비라도
             특정 챔버만 문제인 경우가 현업에서 흔하므로, 식별자를 처음부터 챔버 단위로 만든다.
+
+        검사 스텝은 예외다: 소모품인 **프로브 카드**가 테스터 사이를 옮겨 다니므로
+        "설비 안의 챔버"라는 계층이 성립하지 않는다. 그래서 단위를 직접 지정한다.
         """
+        if self.explicit_units:
+            return self.explicit_units
         return tuple(
             f"{eq}/ch{c}"
             for eq in self.equipments
@@ -330,12 +338,77 @@ PROCESS_STEPS: tuple[ProcessStep, ...] = (
     ),
 )
 
+# ──────────────────────────────────────────────────────────────────────────
+# 4-A. EDS 검사 설비 (설계서 §1 · 첨부 도메인 문서 §3)
+#
+# 왜 검사 설비를 데이터 모델에 넣나 ★★:
+#     웨이퍼 맵의 불량이 **공정에서 왔다는 보장이 없다.** 프로브 카드 니들이 마모되면
+#     엣지 die에서 접촉이 먼저 끊겨 Edge-Ring과 **똑같이 생긴 맵**이 나온다. 그런데
+#     이건 식각 챔버를 아무리 손봐도 없어지지 않는다 — 카드를 세정·교체해야 한다.
+#
+#     검사 설비 축이 데이터에 없으면 분석은 **구조적으로 항상 공정을 범인으로 지목한다.**
+#     후보 목록에 없는 것은 1위가 될 수 없기 때문이다. 이건 모델 성능 문제가 아니라
+#     데이터 설계 문제이고, 현업에서는 멀쩡한 챔버를 세우는 오진으로 이어진다.
+# ──────────────────────────────────────────────────────────────────────────
+
+#: 검사 스텝 식별자 — 공정 스텝(P0xx)과 구분되도록 T 접두를 쓴다
+TEST_STEP_ID = "T010"
+
+#: ATE(테스터). 웨이퍼는 lot 단위로 한 테스터에 배정된다.
+TESTERS: tuple[str, ...] = ("ATE-01", "ATE-02", "ATE-03", "ATE-04")
+
+#: 프로브 카드. **소모품이며 테스터 사이를 옮겨 다닌다** — 그래서 검정 단위가 된다.
+PROBE_CARDS: tuple[str, ...] = ("PC-01", "PC-02", "PC-03", "PC-04", "PC-05", "PC-06")
+
+#: 동시 측정 site 수. die 수 ÷ 이 값 ≈ 웨이퍼 1장당 터치다운 횟수.
+PROBE_PARALLELISM = 16
+
+#: 웨이퍼 1장을 다 찍는 데 필요한 터치다운 횟수.
+#: 300mm 웨이퍼에 die 1,584개(합성 기하 기준) ÷ 16 site = 99회.
+TOUCHDOWNS_PER_WAFER = 99
+
+#: 프로브 카드 세정 주기(터치다운 횟수). 이 값을 넘기면 니들 오염으로 접촉 저항이 오른다.
+PROBE_CARD_PM_TOUCHDOWNS = 250_000
+
+TEST_STEP = ProcessStep(
+    step_id=TEST_STEP_ID,
+    name_ko="EDS 검사",
+    name_en="EDS / Wafer Test",
+    equipments=TESTERS,
+    chambers_per_equip=1,
+    # 검정 단위는 테스터가 아니라 프로브 카드다 (위 설명 참조)
+    explicit_units=PROBE_CARDS,
+    params=(
+        # 누적 터치다운 — 카드 마모의 대리 지표. PM에서 0으로 리셋되는 카운터다.
+        ParamSpec("touchdown_count", "회", float(PROBE_CARD_PM_TOUCHDOWNS), 0.0,
+                  0.0, float(PROBE_CARD_PM_TOUCHDOWNS), kind="counter"),
+        # 오버드라이브 — 니들을 pad에 얼마나 눌러 넣는가. 작으면 엣지에서 접촉이 끊긴다.
+        ParamSpec("probe_overdrive", "um", 75.0, 2.5, 60.0, 90.0, trace_noise=1.0),
+        # 접촉 저항 — 마모의 **결과**다. 조작 손잡이가 아니라 계측값.
+        ParamSpec("contact_resistance", "ohm", 0.85, 0.06, 0.0, 1.50,
+                  role="measurement"),
+        # 프로브 마크 위치 오차 — 정렬이 틀어지면 특정 die에서만 접촉이 빗나간다.
+        ParamSpec("probe_mark_offset", "um", 0.0, 1.2, -6.0, 6.0, trace_noise=0.5),
+        # 척 온도 — 측정 조건. 흔들리면 전기 특성 판정이 흔들린다.
+        ParamSpec("chuck_temp", "degC", 25.0, 0.35, 23.0, 27.0, trace_noise=0.15),
+        # 테스트 시간 — 재측정이 늘면 길어진다. 계측값.
+        ParamSpec("test_time", "s", 210.0, 6.0, 180.0, 260.0, role="measurement"),
+    ),
+    note="맵의 불량이 공정이 아니라 검사에서 왔을 가능성을 판별하기 위한 축",
+)
+
+#: 스텝 조회표 — 공정 스텝 + 검사 스텝.
+#: 검사 스텝은 `PROCESS_STEPS`에 넣지 **않는다.** 라우팅·사이클타임 계산은 팹 공정만
+#: 대상으로 하며, 검사는 그 뒤에 한 번 일어나는 별도 단계이기 때문이다.
 STEPS_BY_ID: dict[str, ProcessStep] = {s.step_id: s for s in PROCESS_STEPS}
+STEPS_BY_ID[TEST_STEP.step_id] = TEST_STEP
 
 #: 파라미터명 → 역할("control" | "measurement"). 원인 분석에서 조치 가능한 것만
 #: 골라내는 데 쓴다(§M4). 같은 이름이 여러 스텝에 있으면 역할은 동일하다고 본다.
 PARAM_ROLE: dict[str, str] = {
-    param.name: param.role for step in PROCESS_STEPS for param in step.params
+    param.name: param.role
+    for step in (*PROCESS_STEPS, TEST_STEP)
+    for param in step.params
 }
 
 
@@ -469,6 +542,56 @@ CAUSE_RULES: dict[str, CauseRule] = {
         step_id=None,
         mechanism="정상 웨이퍼",
     ),
+}
+
+
+# ── 검사 기인 불량 (설계서 §2.4-A) ──────────────────────────────────────
+#
+# 같은 맵 패턴을 만드는 **두 번째 경로**다. 공정 규칙(CAUSE_RULES)과 나란히 존재하며,
+# 분석은 둘 중 어느 쪽인지 가려낼 수 있어야 한다.
+#
+# 왜 이 구분이 실무에서 중요한가:
+#   · 오진 비용이 비대칭이다. 검사 문제를 공정 탓으로 돌리면 **멀쩡한 챔버를 세우고도**
+#     불량이 계속된다. 반대로 공정 문제를 카드 탓으로 돌리면 카드만 갈다 시간을 버린다.
+#   · 조치 리드타임이 다르다. 프로브 카드 세정은 수 시간, 챔버 PM은 수 일이다.
+#   · 재검사로 확인이 가능하다 — 같은 웨이퍼를 다른 카드로 다시 측정했을 때 결과가
+#     달라지면 검사 기인이다. 분석은 그 재검사 대상을 좁혀 주는 역할을 한다.
+
+TEST_CAUSE_RULES: dict[str, CauseRule] = {
+    "Edge-Ring": CauseRule(
+        pattern="Edge-Ring",
+        step_id=TEST_STEP_ID,
+        mechanism=(
+            "프로브 카드 니들 오염·마모로 접촉 저항 상승 → 평탄도가 나쁜 최외곽 die부터 "
+            "접촉이 끊겨 링 모양 fail. 식각 기인 Edge-Ring과 맵으로는 구분되지 않는다"
+        ),
+        perturbations=(
+            ParamPerturbation("touchdown_count", counter_ratio=0.93),
+            ParamPerturbation("contact_resistance", shift_sigma=+3.5),
+            ParamPerturbation("probe_overdrive", shift_sigma=-3.0),
+        ),
+    ),
+    "Loc": CauseRule(
+        pattern="Loc",
+        step_id=TEST_STEP_ID,
+        mechanism=(
+            "프로브 카드 정렬 틀어짐으로 특정 site의 니들이 pad를 빗나감 → 같은 카드로 "
+            "측정한 웨이퍼마다 **같은 위치**에서 국부 fail. 포토 기인 Loc과 구분해야 한다"
+        ),
+        perturbations=(
+            ParamPerturbation("probe_mark_offset", shift_sigma=+4.0),
+            ParamPerturbation("contact_resistance", shift_sigma=+2.0),
+            ParamPerturbation("test_time", shift_sigma=+2.5),
+        ),
+    ),
+}
+
+#: 각 패턴에서 **검사 기인이 차지하는 비율**.
+#: 왜 비율로 두나: 패턴별 총 장수는 WM-811K 실측 분포를 따라야 한다(§M1). 검사 기인을
+#: 위에 얹으면 그 분포가 깨지므로, 정해진 장수를 두 경로가 **나눠 갖게** 한다.
+TEST_INDUCED_SHARE: dict[str, float] = {
+    "Edge-Ring": 0.30,
+    "Loc": 0.25,
 }
 
 

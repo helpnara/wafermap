@@ -45,24 +45,36 @@ SPC 관리도에 잡힐 이상 구간 없음    그 기간·그 챔버 웨이퍼
 실제 팹의 불량은 **항상 특정 설비·특정 기간에 몰려서** 발생한다.
 그 구조를 재현하지 않으면 M2~M4에서 찾을 것 자체가 존재하지 않는다.
 
-`_assign_patterns`가 이 일을 한다.
+`_infect`가 이 일을 한다. `_assign_patterns`가 패턴별로 이 함수를 부른다.
 
 ```python
-step = STEPS_BY_ID[rule.step_id]
-chamber = str(rng.choice(step.chamber_ids))
+unit = str(rng.choice(np.array(units)))
 ...
 win_hours = span_hours * rng.uniform(0.03, 0.12)
 ...
 eligible = np.where(
-    (lot_chamber == chamber) & in_window & (pattern.to_numpy() == "none")
+    (unit_of_wafer == unit) & in_window & (pattern.to_numpy() == "none")
 )[0]
 ...
 hit = eligible[rng.random(len(eligible)) < attack]
 ```
 
-- `step` / `chamber` — 이 패턴의 원인 스텝에서 챔버 하나를 "범인"으로 지목
+- `unit` — 설비 하나를 "범인"으로 지목
 - `win_hours` — 전체 기간의 3~12% 길이로 이상 구간을 잡는다
-- `eligible` — 그 챔버를 지났고 + 그 기간이었고 + 아직 미배정인 웨이퍼
+- `eligible` — 그 설비를 지났고 + 그 기간이었고 + 아직 미배정인 웨이퍼
+
+**왜 "챔버"가 아니라 "단위(unit)"인가** (M5.5-①에서 바뀐 부분):
+같은 절차를 두 축에 쓰기 때문이다.
+
+| | 단위 | 시각 기준 |
+|---|---|---|
+| 공정 기인 | 공정 챔버 (`ETCH-B/ch4`) | 공정 투입 시각 |
+| 검사 기인 | 프로브 카드 (`PC-05`) | **EDS 검사 시각** |
+
+프로브 카드 니들이 마모되면 엣지 die부터 접촉이 끊겨 **Edge-Ring과 똑같이 생긴 맵**이
+나온다. 맵만 봐서는 구분되지 않지만 조치는 완전히 다르다 — 카드 세정은 수 시간,
+챔버 PM은 수 일이다. 그래서 시뮬레이터가 두 경로를 **모두** 만들고,
+분석이 이를 갈라내는지 채점한다(`validate.score_equipment_axis`).
 - `hit` — 그중 `attack_rate` 비율만 실제 불량이 된다 (전부는 아니다)
 
 "그 챔버를 지나갔고 + 그 기간이었고 + 아직 미배정인" 웨이퍼를 골라 감염시킨다.

@@ -475,3 +475,201 @@ def score_parameters(
         )
 
     return report
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# M5.5-① 검사 설비 축 채점 — "공정이냐 검사냐"를 가려내는가
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class AxisScore:
+    """패턴 1종에 대해 두 축의 1위가 정답과 맞는지.
+
+    Attributes:
+        pattern: 대상 패턴
+        n_process, n_test: 공정 기인 / 검사 기인 불량 장수 (정답지)
+        truth_process, truth_test: 각 축의 정답 설비 (없으면 None)
+        found_process, found_test: 각 축에서 분석이 지목한 1위
+        rank_test_overall: 검사 축 1위가 **통합 랭킹**에서 몇 위였는가
+        or_process, or_test: 각 축 1위의 오즈비
+    """
+
+    pattern: str
+    n_process: int
+    n_test: int
+    truth_process: str | None
+    truth_test: str | None
+    found_process: str | None
+    found_test: str | None
+    rank_test_overall: int | None
+    or_process: float
+    or_test: float
+
+    @property
+    def process_hit(self) -> bool | None:
+        if self.truth_process is None:
+            return None
+        return self.found_process == self.truth_process
+
+    @property
+    def test_hit(self) -> bool | None:
+        if self.truth_test is None:
+            return None
+        return self.found_test == self.truth_test
+
+    @property
+    def hidden_in_combined(self) -> bool:
+        """검사 원인이 통합 랭킹 상위 5위 밖으로 밀렸는가.
+
+        왜 5위인가: 현업에서 커미널리티 결과를 볼 때 상위 몇 개만 확인한다.
+            정답이 9위에 있으면 **찾았다고 말할 수 없다.**
+        """
+        return (
+            self.truth_test is not None
+            and self.rank_test_overall is not None
+            and self.rank_test_overall > 5
+        )
+
+    def describe(self) -> str:
+        def mark(hit: bool | None) -> str:
+            return "—" if hit is None else ("✅" if hit else "❌")
+
+        parts = [
+            f"{self.pattern:<11}",
+            f"공정 {mark(self.process_hit)} {str(self.found_process or '—'):<12}"
+            f"OR {self.or_process:5.2f}",
+            f"검사 {mark(self.test_hit)} {str(self.found_test or '—'):<7}"
+            f"OR {self.or_test:5.2f}",
+            f"(불량 공정 {self.n_process} / 검사 {self.n_test})",
+        ]
+        line = "  ".join(parts)
+        if self.hidden_in_combined:
+            line += f"  ⚠️ 통합 {self.rank_test_overall}위 — 축을 안 나눴으면 못 봤다"
+        return line
+
+
+@dataclass
+class AxisReport:
+    """검사 설비 축 채점 묶음."""
+
+    scores: list[AxisScore] = field(default_factory=list)
+
+    def summary(self) -> str:
+        with_test = [s for s in self.scores if s.truth_test is not None]
+        with_proc = [s for s in self.scores if s.truth_process is not None]
+        hidden = [s for s in with_test if s.hidden_in_combined]
+
+        lines = [f"대상 패턴: {len(self.scores)}종 (검사 기인이 섞인 패턴 {len(with_test)}종)", ""]
+        if with_proc:
+            hit = _rate([bool(s.process_hit) for s in with_proc])
+            lines.append(
+                f"  공정 설비 Top-1 적중률 : {hit:.0%} "
+                f"({sum(bool(s.process_hit) for s in with_proc)}/{len(with_proc)})"
+            )
+        if with_test:
+            hit = _rate([bool(s.test_hit) for s in with_test])
+            lines.append(
+                f"  검사 설비 Top-1 적중률 : {hit:.0%} "
+                f"({sum(bool(s.test_hit) for s in with_test)}/{len(with_test)})"
+            )
+            lines.append(
+                f"  통합 랭킹에 묻힌 건수  : {len(hidden)}/{len(with_test)} "
+                f"— 축을 나누지 않았다면 놓쳤을 원인"
+            )
+
+        # ── 위양성 위험 ★ 정직하게 같이 보고한다 ────────────────────────
+        # 검사 축은 **검사 원인이 없어도 무언가를 1위로 내놓는다.** 그 OR이 진짜
+        # 원인이 있을 때보다 오히려 클 수 있다면, OR만 보고 "검사가 문제"라고
+        # 판단해서는 안 된다는 뜻이다.
+        without_test = [
+            s for s in self.scores if s.truth_test is None and np.isfinite(s.or_test)
+        ]
+        real = [s.or_test for s in with_test if np.isfinite(s.or_test)]
+        fake = [s.or_test for s in without_test]
+        if real and fake:
+            lines += [
+                "",
+                f"  ⚠️ 검사 축 OR — 진짜 원인 있을 때 평균 {np.mean(real):.2f} "
+                f"vs 없을 때 평균 {np.mean(fake):.2f}",
+            ]
+            if np.mean(fake) >= np.mean(real):
+                lines.append(
+                    "     **OR만으로는 검사 기인 여부를 판정할 수 없다.** 축은 후보를"
+                )
+                lines.append(
+                    "     보여줄 뿐이며, 확정은 재검사(다른 카드로 재측정)로 해야 한다."
+                )
+        return "\n".join(lines)
+
+
+def score_equipment_axis(
+    wafer_master: pd.DataFrame,
+    fdc_summary: pd.DataFrame,
+    ground_truth: pd.DataFrame,
+    *,
+    patterns: list[str] | None = None,
+    unit: str = "lot",
+    min_case: int = 15,
+) -> AxisReport:
+    """검사 설비 축을 넣었을 때 분석이 두 원인을 갈라내는지 채점한다 ★.
+
+    왜 이 채점이 필요한가: 검사 설비를 데이터에 넣기만 하고 끝내면, 정말 도움이
+        되는지 알 수 없다. 검사 기인 불량이 섞인 패턴에서 **프로브 카드를 지목하는가**,
+        그리고 축을 나누지 않았다면 **놓쳤을 것인가**를 수치로 확인한다.
+
+    Returns:
+        AxisReport
+    """
+    from wafermap.analysis import commonality, spc
+
+    if patterns is None:
+        patterns = sorted(
+            ground_truth.loc[ground_truth["true_root_step"].notna(), "pattern_label"].unique()
+        )
+
+    report = AxisReport()
+    for pattern in patterns:
+        sub = ground_truth[ground_truth["pattern_label"] == pattern]
+        if len(sub) < min_case:
+            continue
+
+        from_test = sub["is_test_induced"].to_numpy()
+
+        def _mode(frame: pd.DataFrame) -> str | None:
+            values = frame["true_root_equip"].dropna()
+            return str(values.mode().iloc[0]) if len(values) else None
+
+        truth_process = _mode(sub[~from_test]) if (~from_test).any() else None
+        truth_test = _mode(sub[from_test]) if from_test.any() else None
+
+        split = spc.split_by_pattern(wafer_master, pattern)
+        axes = commonality.by_axis(
+            fdc_summary, split.case_ids, split.control_ids,
+            wafer_master=wafer_master, unit=unit,
+        )
+        if axes.empty:
+            continue
+
+        def _pick(axis: str) -> dict:
+            row = axes[axes["axis"] == axis]
+            return row.iloc[0].to_dict() if len(row) else {}
+
+        proc, test = _pick("process"), _pick("test")
+        report.scores.append(
+            AxisScore(
+                pattern=pattern,
+                n_process=int((~from_test).sum()),
+                n_test=int(from_test.sum()),
+                truth_process=truth_process,
+                truth_test=truth_test,
+                found_process=proc.get("chamber_id"),
+                found_test=test.get("chamber_id"),
+                rank_test_overall=(
+                    int(test["rank_overall"]) if "rank_overall" in test else None
+                ),
+                or_process=float(proc.get("odds_ratio", float("nan"))),
+                or_test=float(test.get("odds_ratio", float("nan"))),
+            )
+        )
+    return report
