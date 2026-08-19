@@ -282,3 +282,196 @@ def score_spc_detection(
         "detection_rate": detected / len(truth),
         "n_false_positive": false_positive,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# M4 — 원인 파라미터 채점
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ParamScore:
+    """패턴 하나의 원인 파라미터 채점 결과.
+
+    Attributes:
+        pattern: 불량 패턴
+        step_id: 분석한 스텝
+        chamber_id: 층화한 챔버 (None이면 스텝 전체)
+        auc: 모델의 교차검증 AUC
+        true_params: 정답 파라미터
+        ranked_params: 분석이 매긴 순위 (조치 가능한 것만)
+        top1_hit, top3_hit, top5_hit: 상위 n개 안에 정답이 있는가
+        n_case: 이상군 표본 수
+        top1_is_measurement: 필터 전 1위가 계측값이었는가
+    """
+
+    pattern: str
+    step_id: str
+    chamber_id: str | None
+    auc: float
+    true_params: tuple[str, ...]
+    ranked_params: tuple[str, ...]
+    top1_hit: bool
+    top3_hit: bool
+    top5_hit: bool
+    n_case: int
+    top1_is_measurement: bool
+
+    def describe(self) -> str:
+        marks = "".join(
+            "✅" if hit else "❌" for hit in (self.top1_hit, self.top3_hit, self.top5_hit)
+        )
+        note = " (원본 1위는 계측값)" if self.top1_is_measurement else ""
+        return (
+            f"{self.pattern:<11} {self.step_id}  AUC {self.auc:.3f}  "
+            f"Top1/3/5 {marks}  1위={self.ranked_params[0] if self.ranked_params else '-'}{note}"
+        )
+
+
+@dataclass
+class ParamReport:
+    """M4 전체 채점 요약."""
+
+    scores: list[ParamScore] = field(default_factory=list)
+
+    @property
+    def top1_rate(self) -> float:
+        return _rate([s.top1_hit for s in self.scores])
+
+    @property
+    def top3_rate(self) -> float:
+        return _rate([s.top3_hit for s in self.scores])
+
+    @property
+    def top5_rate(self) -> float:
+        return _rate([s.top5_hit for s in self.scores])
+
+    @property
+    def mean_auc(self) -> float:
+        values = [s.auc for s in self.scores if np.isfinite(s.auc)]
+        return float(np.mean(values)) if values else float("nan")
+
+    def summary(self) -> str:
+        n = len(self.scores)
+        if not n:
+            return "채점할 패턴이 없습니다."
+        return "\n".join(
+            [
+                f"대상 패턴: {n}종   평균 AUC: {self.mean_auc:.3f}",
+                "",
+                f"  원인 파라미터 Top-1 적중률 : {self.top1_rate:.0%} "
+                f"({sum(s.top1_hit for s in self.scores)}/{n})",
+                f"  원인 파라미터 Top-3 적중률 : {self.top3_rate:.0%} "
+                f"({sum(s.top3_hit for s in self.scores)}/{n})",
+                f"  원인 파라미터 Top-5 포함률 : {self.top5_rate:.0%} "
+                f"({sum(s.top5_hit for s in self.scores)}/{n})",
+            ]
+        )
+
+    def to_frame(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "pattern": s.pattern,
+                    "step_id": s.step_id,
+                    "chamber_id": s.chamber_id,
+                    "auc": s.auc,
+                    "n_case": s.n_case,
+                    "top1_hit": s.top1_hit,
+                    "top3_hit": s.top3_hit,
+                    "top5_hit": s.top5_hit,
+                    "top1_is_measurement": s.top1_is_measurement,
+                    "true_params": ", ".join(s.true_params),
+                    "top5_ranked": ", ".join(s.ranked_params[:5]),
+                }
+                for s in self.scores
+            ]
+        )
+
+
+def score_parameters(
+    wafer_master: pd.DataFrame,
+    fdc_summary: pd.DataFrame,
+    *,
+    patterns: list[str] | None = None,
+    stratify_by_chamber: bool = True,
+    actionable_only: bool = True,
+    min_case: int = 15,
+) -> ParamReport:
+    """원인 파라미터 규명을 돌리고 정답지와 대조해 채점한다.
+
+    Args:
+        wafer_master, fdc_summary: 데이터
+        patterns: 채점할 패턴들. None이면 원인이 있는 패턴 전부
+        stratify_by_chamber: M3가 찾은 진범 챔버로 층화할지.
+            층화하면 챔버 간 baseline 차이가 제거되어 AUC가 올라간다.
+        actionable_only: 조치 가능한 파라미터만 순위에 넣을지(§attribution).
+            계측값은 조작할 수 없어 개선안의 대상이 될 수 없다.
+        min_case: 이상군이 이보다 적으면 건너뛴다
+
+    Returns:
+        ParamReport
+    """
+    from wafermap.analysis import attribution, commonality, spc
+    from wafermap.config import CAUSE_RULES
+    from wafermap.models import cause_model
+
+    if patterns is None:
+        patterns = [p for p, r in CAUSE_RULES.items() if r.step_id is not None]
+
+    report = ParamReport()
+    for pattern in sorted(patterns):
+        rule = CAUSE_RULES.get(pattern)
+        if rule is None or rule.step_id is None:
+            continue
+
+        split = spc.split_by_pattern(wafer_master, pattern)
+        if len(split.case_ids) < min_case:
+            continue
+
+        chamber = None
+        if stratify_by_chamber:
+            ranking = commonality.analyze(
+                fdc_summary, split.case_ids, split.control_ids,
+                wafer_master=wafer_master, unit="lot",
+            )
+            same_step = ranking[ranking["step_id"] == rule.step_id]
+            if not same_step.empty:
+                chamber = str(same_step.iloc[0]["chamber_id"])
+
+        try:
+            result = cause_model.fit(
+                fdc_summary, rule.step_id, pattern,
+                split.case_ids, split.control_ids, chamber_id=chamber,
+            )
+        except ValueError:
+            continue
+
+        evidence = attribution.build_evidence(
+            result, fdc_summary, split.case_ids, split.control_ids, chamber_id=chamber
+        )
+        if not evidence:
+            continue
+
+        top1_is_measurement = not evidence[0].is_controllable
+        ranked = attribution.actionable_ranking(evidence) if actionable_only else evidence
+        ranked_params = tuple(e.param for e in ranked)
+
+        true_params = tuple(p.param for p in rule.perturbations)
+        report.scores.append(
+            ParamScore(
+                pattern=pattern,
+                step_id=rule.step_id,
+                chamber_id=chamber,
+                auc=result.auc,
+                true_params=true_params,
+                ranked_params=ranked_params,
+                top1_hit=bool(ranked_params[:1]) and ranked_params[0] in true_params,
+                top3_hit=bool(set(ranked_params[:3]) & set(true_params)),
+                top5_hit=bool(set(ranked_params[:5]) & set(true_params)),
+                n_case=result.n_case,
+                top1_is_measurement=top1_is_measurement,
+            )
+        )
+
+    return report

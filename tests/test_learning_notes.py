@@ -53,6 +53,21 @@ def test_learning_notes_exist():
     assert _note_files(), "학습노트가 하나도 없습니다"
 
 
+def _module_paths(meta: dict[str, str]) -> list[Path]:
+    """노트가 다루는 소스 파일 목록.
+
+    하나의 학습노트가 여러 모듈을 함께 설명하는 경우가 있다(예: M4는 모델과
+    해석 모듈을 같이 다룬다). `module`은 대표 모듈, `also_covers`는 함께 인용하는
+    보조 모듈을 쉼표로 나열한다.
+    """
+    paths = [PROJECT_ROOT / meta["module"]]
+    for extra in meta.get("also_covers", "").split(","):
+        extra = extra.strip().strip("[]")
+        if extra:
+            paths.append(PROJECT_ROOT / extra)
+    return paths
+
+
 @pytest.mark.parametrize("note", _note_files(), ids=lambda p: p.name)
 def test_frontmatter_module_exists(note: Path):
     """frontmatter가 가리키는 소스 파일이 실제로 존재해야 한다."""
@@ -61,8 +76,8 @@ def test_frontmatter_module_exists(note: Path):
     assert "module" in meta, f"{note.name}: module 필드가 없습니다"
     assert "milestone" in meta, f"{note.name}: milestone 필드가 없습니다"
 
-    module_path = PROJECT_ROOT / meta["module"]
-    assert module_path.exists(), f"{note.name}: 없는 모듈을 가리킴 → {meta['module']}"
+    for path in _module_paths(meta):
+        assert path.exists(), f"{note.name}: 없는 모듈을 가리킴 → {path}"
 
 
 @pytest.mark.parametrize("note", _note_files(), ids=lambda p: p.name)
@@ -82,7 +97,7 @@ def test_quoted_code_matches_source(note: Path):
     """
     text = note.read_text(encoding="utf-8")
     meta = _frontmatter(text)
-    source = (PROJECT_ROOT / meta["module"]).read_text(encoding="utf-8")
+    source = "\n".join(p.read_text(encoding="utf-8") for p in _module_paths(meta))
 
     mismatches: list[str] = []
     for block in _python_blocks(text):

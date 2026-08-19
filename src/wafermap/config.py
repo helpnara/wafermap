@@ -122,6 +122,16 @@ class ParamSpec:
         spec_lo, spec_hi: 관리 규격 하한/상한 (SPC 위반 판정 및 개선안 도출 기준)
         kind: ``"gaussian"`` = 목표값 주변 정규분포 / ``"counter"`` = PM 때 0으로 리셋되는
               소모품 누적 사용량(edge ring RF 시간, CMP 패드 수명 등)
+        role: ``"control"`` = 엔지니어가 **직접 조작**할 수 있는 설정값 /
+              ``"measurement"`` = 공정의 **결과로 측정**되는 값
+
+              왜 이 구분이 필요한가 ★: 원인 분석에서 계측값이 상위에 오는 일이 흔하다.
+              예를 들어 증착 온도가 튀면 두께 산포(thickness_sigma)가 커지고, 그 산포가
+              불량과 더 강한 상관을 보인다. 하지만 **두께 산포는 조작할 수 없다.**
+              조치하려면 온도를 잡아야 한다.
+
+              계측값은 "원인의 결과"이므로, 조치 가능한 파라미터와 반드시 구분해야
+              엉뚱한 개선안이 나오지 않는다.
         trace_noise: 웨이퍼 1장 처리 중 시계열 변동폭 (fdc_trace 생성에 사용)
     """
 
@@ -132,11 +142,14 @@ class ParamSpec:
     spec_lo: float
     spec_hi: float
     kind: str = "gaussian"
+    role: str = "control"
     trace_noise: float = 0.0
 
     def __post_init__(self) -> None:
         if self.kind not in ("gaussian", "counter"):
             raise ValueError(f"kind는 'gaussian' 또는 'counter': {self.kind!r}")
+        if self.role not in ("control", "measurement"):
+            raise ValueError(f"role은 'control' 또는 'measurement': {self.role!r}")
         if self.spec_lo >= self.spec_hi:
             raise ValueError(f"{self.name}: spec_lo < spec_hi 여야 합니다")
 
@@ -191,7 +204,7 @@ PROCESS_STEPS: tuple[ProcessStep, ...] = (
             ParamSpec("overlay_y", "nm", 0.0, 1.5, -6.0, 6.0),
             ParamSpec("bake_temp", "degC", 110.0, 0.40, 108.0, 112.0, trace_noise=0.2),
             ParamSpec("ebr_width", "mm", 2.0, 0.08, 1.7, 2.3),
-            ParamSpec("defect_adder_count", "ea", 3.0, 1.8, 0.0, 15.0),
+            ParamSpec("defect_adder_count", "ea", 3.0, 1.8, 0.0, 15.0, role="measurement"),
         ),
     ),
     ProcessStep(
@@ -206,7 +219,7 @@ PROCESS_STEPS: tuple[ProcessStep, ...] = (
             ParamSpec("cf4_flow", "sccm", 120.0, 1.5, 114.0, 126.0, trace_noise=0.8),
             ParamSpec("o2_flow", "sccm", 20.0, 0.60, 18.0, 22.0, trace_noise=0.3),
             ParamSpec("electrode_temp", "degC", 60.0, 0.70, 57.0, 63.0, trace_noise=0.3),
-            ParamSpec("endpoint_time", "s", 95.0, 2.0, 88.0, 102.0),
+            ParamSpec("endpoint_time", "s", 95.0, 2.0, 88.0, 102.0, role="measurement"),
             # 소모품 수명: PM 주기 400시간, 마모될수록 엣지 식각률이 떨어진다(§2.4 Edge-Ring)
             ParamSpec("edge_ring_rf_hours", "h", 400.0, 0.0, 0.0, 400.0, kind="counter"),
         ),
@@ -221,8 +234,8 @@ PROCESS_STEPS: tuple[ProcessStep, ...] = (
             ParamSpec("dep_temp", "degC", 620.0, 2.0, 612.0, 628.0, trace_noise=1.0),
             ParamSpec("precursor_flow", "sccm", 350.0, 5.0, 335.0, 365.0, trace_noise=2.5),
             ParamSpec("chamber_pressure", "Torr", 2.5, 0.05, 2.3, 2.7, trace_noise=0.02),
-            ParamSpec("thickness_mean", "A", 450.0, 6.0, 430.0, 470.0),
-            ParamSpec("thickness_sigma", "A", 8.0, 1.2, 0.0, 14.0),
+            ParamSpec("thickness_mean", "A", 450.0, 6.0, 430.0, 470.0, role="measurement"),
+            ParamSpec("thickness_sigma", "A", 8.0, 1.2, 0.0, 14.0, role="measurement"),
             # 중간 반경대 온도 편차 → Donut 패턴의 물리적 기전(§2.4)
             ParamSpec("susceptor_temp_mid_delta", "degC", 0.0, 0.50, -2.5, 2.5),
         ),
@@ -267,9 +280,9 @@ PROCESS_STEPS: tuple[ProcessStep, ...] = (
             ParamSpec("platen_speed", "rpm", 60.0, 1.2, 55.0, 65.0, trace_noise=0.6),
             ParamSpec("slurry_flow", "ml/min", 200.0, 5.0, 180.0, 220.0, trace_noise=2.5),
             ParamSpec("conditioning_time", "s", 30.0, 1.0, 26.0, 34.0),
-            ParamSpec("removal_rate", "A/min", 2800.0, 60.0, 2600.0, 3000.0),
+            ParamSpec("removal_rate", "A/min", 2800.0, 60.0, 2600.0, 3000.0, role="measurement"),
             ParamSpec("center_zone_pressure", "psi", 3.2, 0.10, 2.8, 3.6, trace_noise=0.05),
-            ParamSpec("slurry_particle_count", "ea", 4.0, 2.0, 0.0, 18.0),
+            ParamSpec("slurry_particle_count", "ea", 4.0, 2.0, 0.0, 18.0, role="measurement"),
             # 소모품 수명: 패드 1200장 주기. 마모될수록 중심부 제거율이 튄다(§2.4 Center)
             ParamSpec("pad_life", "wafers", 1200.0, 0.0, 0.0, 1200.0, kind="counter"),
         ),
@@ -284,7 +297,7 @@ PROCESS_STEPS: tuple[ProcessStep, ...] = (
             ParamSpec("chem_conc", "%", 2.0, 0.05, 1.8, 2.2),
             ParamSpec("bath_temp", "degC", 65.0, 0.60, 62.0, 68.0, trace_noise=0.3),
             ParamSpec("di_resistivity", "Mohm-cm", 18.2, 0.15, 17.5, 18.5),
-            ParamSpec("particle_count", "ea", 5.0, 2.5, 0.0, 20.0),
+            ParamSpec("particle_count", "ea", 5.0, 2.5, 0.0, 20.0, role="measurement"),
             ParamSpec("chuck_edge_temp_dev", "degC", 0.0, 0.30, -1.5, 1.5),
         ),
     ),
@@ -309,15 +322,34 @@ PROCESS_STEPS: tuple[ProcessStep, ...] = (
         equipments=("MET-01",),
         chambers_per_equip=1,
         params=(
-            ParamSpec("cd_mean", "nm", 38.0, 0.60, 35.5, 40.5),
-            ParamSpec("cd_sigma", "nm", 1.2, 0.20, 0.0, 2.2),
-            ParamSpec("thickness", "A", 450.0, 5.0, 430.0, 470.0),
-            ParamSpec("overlay_residual", "nm", 0.0, 1.0, -4.0, 4.0),
+            ParamSpec("cd_mean", "nm", 38.0, 0.60, 35.5, 40.5, role="measurement"),
+            ParamSpec("cd_sigma", "nm", 1.2, 0.20, 0.0, 2.2, role="measurement"),
+            ParamSpec("thickness", "A", 450.0, 5.0, 430.0, 470.0, role="measurement"),
+            ParamSpec("overlay_residual", "nm", 0.0, 1.0, -4.0, 4.0, role="measurement"),
         ),
     ),
 )
 
 STEPS_BY_ID: dict[str, ProcessStep] = {s.step_id: s for s in PROCESS_STEPS}
+
+#: 파라미터명 → 역할("control" | "measurement"). 원인 분석에서 조치 가능한 것만
+#: 골라내는 데 쓴다(§M4). 같은 이름이 여러 스텝에 있으면 역할은 동일하다고 본다.
+PARAM_ROLE: dict[str, str] = {
+    param.name: param.role for step in PROCESS_STEPS for param in step.params
+}
+
+
+def is_controllable(param_name: str) -> bool:
+    """엔지니어가 직접 조작할 수 있는 파라미터인가.
+
+    `chamber_pressure_mean` 처럼 접미사가 붙은 컬럼명도 받아들인다.
+    """
+    base = param_name
+    for suffix in ("_mean", "_std", "_min", "_max"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return PARAM_ROLE.get(base, "control") == "control"
 
 
 # ──────────────────────────────────────────────────────────────────────────
