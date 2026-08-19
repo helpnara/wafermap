@@ -967,3 +967,163 @@ def _score_shape(
             std_gap_sigma=gap("_std"),
         )
     ]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# M5.5-③ 교호작용 채점 — 주효과로 안 보이는 원인을 찾는가
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class InteractionScore:
+    """교호작용 원인을 찾아내는지 채점한다.
+
+    Attributes:
+        pattern: 대상 패턴
+        n_case: 교호작용 기인 웨이퍼 수
+        truth_pair: 정답 파라미터 쌍
+        rank_all: 전체 후보 중 정답 쌍의 순위
+        rank_hidden: **주효과로 안 보이는 쌍**만 추린 목록에서의 순위
+        n_hidden: 주효과로 안 보이는 쌍의 개수
+        main_a, main_b: 정답 쌍 각 파라미터의 단독 효과
+        contrast: 정답 쌍의 교호작용 대비
+        truth_equip_pair: 정답 설비 조합
+        equip_rank: 설비 조합 순위
+        equip_excess: 그 조합의 초과 불량률
+    """
+
+    pattern: str
+    n_case: int
+    truth_pair: tuple[str, str]
+    rank_all: int | None
+    rank_hidden: int | None
+    n_hidden: int
+    main_a: float
+    main_b: float
+    contrast: float
+    truth_equip_pair: tuple[str, str]
+    equip_rank: int | None
+    equip_excess: float
+
+    def describe(self) -> str:
+        def mark(rank: int | None, limit: int = 1) -> str:
+            return "✅" if rank is not None and rank <= limit else "❌"
+
+        return (
+            f"{self.pattern:<8} 교호작용 기인 {self.n_case}장\n"
+            f"    파라미터 쌍  전체 {self.rank_all or '—'}위 · "
+            f"★주효과로 안 보이는 쌍 중 {mark(self.rank_hidden)}"
+            f"{self.rank_hidden or '—'}/{self.n_hidden}위   "
+            f"대비 {self.contrast:+.2%} (단독 {self.main_a:+.2%}/{self.main_b:+.2%})\n"
+            f"    설비 조합    {mark(self.equip_rank)}{self.equip_rank or '—'}위   "
+            f"초과 불량률 {self.equip_excess:+.1%}"
+        )
+
+
+@dataclass
+class InteractionReport:
+    scores: list[InteractionScore] = field(default_factory=list)
+
+    def summary(self) -> str:
+        if not self.scores:
+            return "채점할 교호작용 사례가 없습니다."
+        hidden_hit = _rate([s.rank_hidden == 1 for s in self.scores])
+        equip_hit = _rate([s.equip_rank == 1 for s in self.scores])
+        all_hit = _rate([s.rank_all == 1 for s in self.scores])
+        return "\n".join([
+            f"대상: {len(self.scores)}건",
+            "",
+            f"  설비 조합 Top-1            : {equip_hit:.0%}",
+            f"  파라미터 쌍 Top-1 (전체)    : {all_hit:.0%}",
+            f"  파라미터 쌍 Top-1 (★필터)   : {hidden_hit:.0%}",
+            "",
+            "  📖 ★필터는 '교호작용 대비는 큰데 각각의 단독 효과는 작은' 쌍만 남긴다.",
+            "     설비 baseline 차이가 만든 가짜 쌍이 대부분 여기서 걸러진다.",
+        ])
+
+
+def score_interaction(
+    fdc_summary: pd.DataFrame,
+    ground_truth: pd.DataFrame,
+    *,
+    min_case: int = 20,
+) -> InteractionReport:
+    """교호작용 원인을 찾는지 정답지와 대조한다 ★.
+
+    두 관점을 모두 채점한다.
+      1. **파라미터 쌍** — 어느 두 조건의 조합이 문제인가
+      2. **설비 조합** — 어느 앞뒤 챔버 조합에서 늘어나는가
+
+    Returns:
+        InteractionReport
+    """
+    from wafermap.analysis import interaction
+    from wafermap.config import INTERACTION_CAUSE_RULES
+
+    report = InteractionReport()
+    control = list(ground_truth.loc[ground_truth["pattern_label"] == "none", "wafer_id"])
+    all_ids = list(ground_truth["wafer_id"])
+
+    for pattern, rule in INTERACTION_CAUSE_RULES.items():
+        sub = ground_truth[ground_truth["pattern_label"] == pattern]
+        case = list(sub.loc[sub["cause_mechanism"] == "interaction", "wafer_id"])
+        if len(case) < min_case:
+            continue
+
+        truth = {f"{rule.step_a}.{rule.param_a}", f"{rule.step_b}.{rule.param_b}"}
+        ids = case + control
+        matrix = interaction.cross_step_matrix(
+            fdc_summary, ids, steps=(rule.step_a, rule.step_b)
+        )
+        matrix = matrix.loc[[w for w in ids if w in matrix.index]]
+        is_case = matrix.index.isin(set(case))
+
+        pairs = interaction.screen_pairs(matrix, is_case, top_n=100)
+        hidden = [p for p in pairs if p.hidden_from_main_effects]
+
+        def find(items: list) -> int | None:
+            for i, item in enumerate(items, 1):
+                if {item.param_a, item.param_b} == truth:
+                    return i
+            return None
+
+        target = next((p for p in pairs if {p.param_a, p.param_b} == truth), None)
+
+        equips = interaction.equipment_pairs(
+            fdc_summary, case, all_ids,
+            step_a=rule.step_a, step_b=rule.step_b, top_n=100,
+        )
+        equip_rank = next(
+            (
+                i
+                for i, e in enumerate(equips, 1)
+                if (e.chamber_a, e.chamber_b) == rule.equip_pair
+            ),
+            None,
+        )
+        equip_excess = next(
+            (
+                e.excess
+                for e in equips
+                if (e.chamber_a, e.chamber_b) == rule.equip_pair
+            ),
+            float("nan"),
+        )
+
+        report.scores.append(
+            InteractionScore(
+                pattern=pattern,
+                n_case=len(case),
+                truth_pair=(f"{rule.step_a}.{rule.param_a}", f"{rule.step_b}.{rule.param_b}"),
+                rank_all=find(pairs),
+                rank_hidden=find(hidden),
+                n_hidden=len(hidden),
+                main_a=target.main_a if target else float("nan"),
+                main_b=target.main_b if target else float("nan"),
+                contrast=target.contrast if target else float("nan"),
+                truth_equip_pair=rule.equip_pair,
+                equip_rank=equip_rank,
+                equip_excess=equip_excess,
+            )
+        )
+    return report

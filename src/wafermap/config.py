@@ -670,6 +670,71 @@ DRIFT_INDUCED_SHARE: dict[str, float] = {
     "Edge-Loc": 0.18,
 }
 
+# ── 공정 간 교호작용 (설계서 §2.4-C · 첨부 도메인 문서 §14·15·37) ──────
+#
+# 네 번째 경로. 앞의 세 경로와 결정적으로 다른 점이 있다.
+#
+#     **어느 파라미터도 혼자서는 규격을 벗어나지 않는다.**
+#
+# 증착이 두께 상한 쪽이고 CMP 제거량이 하한 쪽이면, 각각은 규격 안이지만
+# 최종 잔막이 이탈한다. 반대 조합(얇게 증착 + 강하게 연마)도 마찬가지다.
+# 그래서 단변량 SPC도, 규격 위반 검사도, 파라미터별 평균 비교도 아무것도 못 잡는다.
+#
+# 첨부 문서 §16이 지적한 바로 그 구조다:
+#     "Temperature 자체 → 영향 작음 / Pressure 자체 → 영향 작음
+#      Temperature × Pressure → 불량률 급격히 증가"
+#
+# 방향을 웨이퍼마다 뒤집어(두껍+약함 / 얇음+강함) **주변부 분포의 평균이 정상군과
+# 같도록** 만든다. 그래야 "주효과로는 안 보인다"가 진짜가 된다.
+
+
+@dataclass(frozen=True)
+class InteractionRule:
+    """두 공정 파라미터의 **조합**이 만드는 불량.
+
+    Attributes:
+        pattern: 유발되는 불량 패턴
+        step_a, param_a: 첫 번째 파라미터 (앞 공정)
+        step_b, param_b: 두 번째 파라미터 (뒤 공정)
+        sign_b: 두 파라미터의 상대 방향. -1이면 "A는 올라가고 B는 내려갈 때" 위험하다
+        equip_pair: 이 조합이 자주 나오는 (앞 챔버, 뒤 챔버). 설비 조합 분석의 정답
+        shift_range: 각 파라미터를 밀 크기(σ). **규격 안에 머물도록** 작게 잡는다
+        mechanism: 물리적 기전
+    """
+
+    pattern: str
+    step_a: str
+    param_a: str
+    step_b: str
+    param_b: str
+    sign_b: float
+    equip_pair: tuple[str, str]
+    mechanism: str
+    shift_range: tuple[float, float] = (1.3, 1.9)
+
+
+INTERACTION_CAUSE_RULES: dict[str, InteractionRule] = {
+    "Center": InteractionRule(
+        pattern="Center",
+        step_a="P030",
+        param_a="precursor_flow",
+        step_b="P050",
+        param_b="down_force",
+        sign_b=-1.0,
+        equip_pair=("CVD-02/ch1", "CMP-02/ch3"),
+        mechanism=(
+            "증착이 두께 상한 쪽인데 CMP 제거량이 하한 쪽이면 중심부에 잔막이 남는다. "
+            "반대 조합(얇은 증착 + 강한 연마)이면 중심부가 과연마된다. "
+            "**각 파라미터는 규격 안에 있어 단독으로는 이상으로 잡히지 않는다**"
+        ),
+    ),
+}
+
+#: 각 패턴에서 교호작용 기인이 차지하는 비율.
+INTERACTION_INDUCED_SHARE: dict[str, float] = {
+    "Center": 0.30,
+}
+
 #: 각 패턴에서 **검사 기인이 차지하는 비율**.
 #: 왜 비율로 두나: 패턴별 총 장수는 WM-811K 실측 분포를 따라야 한다(§M1). 검사 기인을
 #: 위에 얹으면 그 분포가 깨지므로, 정해진 장수를 두 경로가 **나눠 갖게** 한다.

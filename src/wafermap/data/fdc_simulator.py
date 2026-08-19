@@ -34,6 +34,8 @@ from wafermap.config import (
     PRODUCT_NAME,
     PROBE_CARDS,
     DRIFT_CAUSE_RULES,
+    INTERACTION_CAUSE_RULES,
+    INTERACTION_INDUCED_SHARE,
     DRIFT_INDUCED_SHARE,
     SPIKE_CAUSE_RULES,
     SPIKE_INDUCED_SHARE,
@@ -441,6 +443,40 @@ def _assign_patterns(
             if pat in SPIKE_CAUSE_RULES
             else 0
         )
+        # ── 교호작용 기인 ★ ────────────────────────────────────────────
+        # 시간 창이 아니라 **설비 조합**으로 감염된다. 그 조합에서 앞뒤 공정의
+        # 파라미터가 같은 방향으로 치우치기 쉽기 때문이다(디스패치·레시피 관행).
+        n_inter = (
+            int(round(n_process * INTERACTION_INDUCED_SHARE.get(pat, 0.0)))
+            if pat in INTERACTION_CAUSE_RULES
+            else 0
+        )
+        if n_inter:
+            irule = INTERACTION_CAUSE_RULES[pat]
+            chamber_a = route_map[irule.step_a].reindex(lot_to_row).to_numpy()
+            chamber_b = route_map[irule.step_b].reindex(lot_to_row).to_numpy()
+            on_pair = (
+                (chamber_a == irule.equip_pair[0]) & (chamber_b == irule.equip_pair[1])
+            )
+            free = np.where(on_pair & (pattern.to_numpy() == "none"))[0]
+            if len(free):
+                lo, hi = difficulty.severity_range
+                take = min(n_inter, len(free))
+                pick = rng.choice(free, size=take, replace=False)
+                pattern.iloc[pick] = pat
+                severity.iloc[pick] = rng.uniform(lo, hi, size=take)
+                mechanism_arr[pick] = "interaction"
+                excursions.append(
+                    Excursion(
+                        excursion_id=f"EXC-{len(excursions) + 1:04d}",
+                        pattern=pat,
+                        step_id=f"{irule.step_a}×{irule.step_b}",
+                        chamber_id=f"{irule.equip_pair[0]}×{irule.equip_pair[1]}",
+                        t_start=t_min, t_end=t_max, attack_rate=float("nan"),
+                    )
+                )
+                n_process -= take
+
         n_drift = (
             int(round(n_process * DRIFT_INDUCED_SHARE.get(pat, 0.0)))
             if pat in DRIFT_CAUSE_RULES
@@ -559,6 +595,12 @@ def _simulate_step_fdc(
     rules_here = {
         pat: rule for pat, rule in source.items() if rule.step_id == step.step_id
     }
+    # 교호작용은 **두 스텝에 걸쳐** 있으므로 어느 쪽이든 이 스텝이면 적용한다
+    interaction_rules = {} if is_test_step else {
+        pat: rule
+        for pat, rule in INTERACTION_CAUSE_RULES.items()
+        if step.step_id in (rule.step_a, rule.step_b)
+    }
 
     out: dict[str, np.ndarray] = {}
     trace_params: dict[str, np.ndarray] = {}
@@ -614,6 +656,26 @@ def _simulate_step_fdc(
                 shift = pert.shift_sigma * param.sigma * sev
                 values = np.where(targets, values + shift, values)
 
+        # ── 교호작용 섭동 ★ ────────────────────────────────────────────
+        # 이 스텝의 파라미터를 **규격 안에서만** 민다. 방향은 웨이퍼마다 뒤집어
+        # (두껍+약함 / 얇음+강함) 주변부 평균이 정상군과 같게 유지한다.
+        # 그래야 "주효과로는 안 보인다"가 데이터에서 실제로 성립한다.
+        for pat, irule in interaction_rules.items():
+            if param.name not in (irule.param_a, irule.param_b):
+                continue
+            hit = np.flatnonzero((pattern == pat) & has_signal & (mech == "interaction"))
+            if not len(hit):
+                continue
+            # 두 파라미터가 **같은 부호**를 써야 조합이 성립한다. 스텝별로 따로
+            # 뽑으면 무작위로 어긋나 교호작용 자체가 만들어지지 않으므로,
+            # 웨이퍼 id에서 결정적으로 부호를 만든다.
+            ids = wafers["wafer_id"].to_numpy()[hit]
+            sign = np.array([1.0 if int(w[-2:]) % 2 else -1.0 for w in ids])
+            lo, hi = irule.shift_range
+            magnitude = rng.uniform(lo, hi, len(hit))
+            direction = irule.sign_b if param.name == irule.param_b else 1.0
+            values[hit] += sign * magnitude * param.sigma * direction
+
         out[f"{param.name}_mean"] = values
 
         # 요약 통계: 웨이퍼 1장 처리 중의 시계열 변동으로부터 파생
@@ -665,6 +727,7 @@ def _simulate_step_fdc(
         for pat, rule in DRIFT_CAUSE_RULES.items()
         if rule.step_id == step.step_id
     }
+
 
     for pname, base in trace_params.items():
         spec = step.param(pname)
