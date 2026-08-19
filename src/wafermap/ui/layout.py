@@ -14,6 +14,29 @@ import streamlit as st
 #: 이 폭 미만이면 모바일 레이아웃 (설계서 §4A.1 브레이크포인트)
 MOBILE_MAX_PX = 640
 
+#: 내비게이션 3-모드 (설계서 §4A.1)
+#:   sidebar — 넓은 화면. 메뉴 이름을 모두 보여준다
+#:   rail    — 중간 화면. 아이콘만 남겨 본문 폭을 확보한다
+#:   top     — 좁은 화면. 사이드바를 없애고 상단 바로 올린다
+NAV_MODES = ("sidebar", "rail", "top")
+
+
+def nav_mode() -> str:
+    """어떤 내비게이션 모드로 그릴지 결정한다.
+
+    왜 3단계인가: 사이드바는 넓은 화면에서는 편하지만 좁아지면 본문을 잡아먹는다.
+        그렇다고 바로 상단 바로 보내면 태블릿 폭에서 메뉴가 한 줄에 안 들어간다.
+        중간에 **아이콘만 남기는 단계**를 두면 본문 폭을 지키면서 이동은 유지된다.
+
+    URL 파라미터 `?nav=rail` 로 강제할 수 있다. 실기기 없이 확인하려면 필요하다.
+    """
+    forced = st.query_params.get("nav")
+    if forced in NAV_MODES:
+        return forced
+    if is_mobile():
+        return "top"
+    return "sidebar"
+
 
 def is_mobile() -> bool:
     """모바일 폭인지 판단한다.

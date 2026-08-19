@@ -1,6 +1,10 @@
 """EDS Wafer Map 분석 시스템 — Streamlit 진입점 (설계서 §4).
 
 실행: streamlit run app.py
+
+화면 확인용 URL 파라미터
+    ?view=mobile   모바일 레이아웃 강제
+    ?nav=rail      내비게이션을 아이콘만 남기는 모드로
 """
 
 from __future__ import annotations
@@ -17,15 +21,31 @@ st.set_page_config(
     page_title="EDS Wafer Map 분석",
     page_icon="🔬",
     layout="wide",
-    initial_sidebar_state="collapsed",  # 모바일에서 표시 영역을 넓게 (§4A.1)
+    # auto = 넓은 화면에서는 펼치고 좁은 화면에서는 접는다.
+    # collapsed로 고정하면 데스크탑에서도 메뉴가 숨어 이동 방법이 안 보인다 (§4A.1)
+    initial_sidebar_state="auto",
 )
 
 from wafermap.ui import layout  # noqa: E402
 
-PAGES = [
-    st.Page("views/improvement.py", title="개선방안·기대효과", icon="🎯", default=True),
+#: (파일, 제목, 아이콘) — rail 모드에서는 제목을 아이콘으로 대체한다
+PAGE_SPECS = [
+    ("views/overview.py", "개요", "🏠"),
+    ("views/improvement.py", "개선방안·기대효과", "🎯"),
 ]
 
-# 모바일에서는 사이드바 대신 상단 바 — 화면 폭을 최대한 쓴다 (§4A.1)
-position = "top" if layout.is_mobile() else "sidebar"
-st.navigation(PAGES, position=position).run()
+mode = layout.nav_mode()
+
+pages = [
+    st.Page(
+        path,
+        # rail 모드는 아이콘만 남겨 본문 폭을 확보한다. Streamlit이 제목을 반드시
+        # 요구하므로 제목 자리에 아이콘을 넣고 icon은 비운다.
+        title=icon if mode == "rail" else title,
+        icon=None if mode == "rail" else icon,
+        default=(index == 0),
+    )
+    for index, (path, title, icon) in enumerate(PAGE_SPECS)
+]
+
+st.navigation(pages, position="top" if mode == "top" else "sidebar").run()
