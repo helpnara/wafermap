@@ -47,6 +47,7 @@ python scripts/build_dataset.py
 python scripts/build_features.py
 python scripts/train_pattern_model.py
 python scripts/build_recommendations.py
+python scripts/build_rootcause.py
 
 streamlit run app.py
 ```

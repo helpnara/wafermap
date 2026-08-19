@@ -202,9 +202,10 @@ python scripts/build_dataset.py           # 5초    — 웨이퍼 맵 6,000장 +
 python scripts/build_features.py          # 83초   — 기하·Radon 피처 추출
 python scripts/train_pattern_model.py     # 23초   — LightGBM 패턴 분류 모델
 python scripts/build_recommendations.py   # 12초   — M3→M4→M5 파이프라인 결과
+python scripts/build_rootcause.py         # 40초   — 원인 분석 화면용 결과
 ```
 
-**총 2분 남짓**입니다. PC 성능에 따라 다소 차이가 납니다.
+**총 3분 남짓**입니다. PC 성능에 따라 다소 차이가 납니다.
 
 ### 선택 — CNN 비교 모델 (오래 걸림)
 

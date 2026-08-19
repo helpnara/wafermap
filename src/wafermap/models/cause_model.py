@@ -308,7 +308,8 @@ def fit(
     direction: dict[str, int] = {}
     for i, name in enumerate(X.columns):
         values = X_shap[name].to_numpy(dtype=float)
-        if np.std(values) < 1e-12:
+        # 어느 한쪽이라도 상수면 상관계수가 0/0이 된다 (numpy가 경고를 낸다)
+        if np.std(values) < 1e-12 or np.std(shap_values[:, i]) < 1e-12:
             direction[name] = 0
             continue
         corr = np.corrcoef(values, shap_values[:, i])[0, 1]

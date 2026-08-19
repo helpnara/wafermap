@@ -37,3 +37,21 @@ def load_recommendations(source: str = "synthetic") -> dict:
             f"먼저 실행하세요: python scripts/build_recommendations.py --source {source}"
         )
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+ROOTCAUSE = "rootcause.json"
+
+
+def rootcause_path(source: str = "synthetic") -> Path:
+    return processed_dir(source) / ROOTCAUSE
+
+
+def load_rootcause(source: str = "synthetic") -> dict:
+    """M6-3 원인 분석 아티팩트를 읽는다."""
+    path = rootcause_path(source)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{path} 가 없습니다.\n"
+            f"먼저 실행하세요: python scripts/build_rootcause.py --source {source}"
+        )
+    return json.loads(path.read_text(encoding="utf-8"))
