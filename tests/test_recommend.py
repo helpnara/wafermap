@@ -17,13 +17,12 @@ pytest.importorskip("shap", reason="shap 미설치 시 건너뜀")
 
 from wafermap.analysis import attribution, recommend  # noqa: E402
 from wafermap.models import cause_model  # noqa: E402
-from tests.test_cause_model import _make_fdc  # noqa: E402
 
 
 @pytest.fixture(scope="module")
-def fitted():
+def fitted(make_fdc):
     """P020(식각) 스텝에 chamber_pressure 이탈을 심은 모델."""
-    fdc, case, control = _make_fdc(culprit="chamber_pressure", shift=3.0, seed=21)
+    fdc, case, control = make_fdc(culprit="chamber_pressure", shift=3.0, seed=21)
     result = cause_model.fit(fdc, "P020", "Edge-Ring", case, control)
     evidence = attribution.build_evidence(result, fdc, case, control, top_n=5)
     return result, evidence
@@ -40,13 +39,13 @@ def test_result_keeps_booster_and_population(fitted):
     assert len(X) == len(y) == result.n_case + result.n_control
 
 
-def test_population_differs_from_shap_sample():
+def test_population_differs_from_shap_sample(make_fdc):
     """SHAP용 표본은 불량을 과대 표집한다 — 모집단과 구분되어야 한다 ★.
 
     왜 중요한가: 여기서 불량률을 재면 실제보다 훨씬 높게 나온다.
         기대효과 추정의 분모가 틀리면 ROI 자릿수가 통째로 틀린다.
     """
-    fdc, case, control = _make_fdc(n_case=60, n_control=900, seed=22)
+    fdc, case, control = make_fdc(n_case=60, n_control=900, seed=22)
     result = cause_model.fit(fdc, "P020", "P", case, control, max_background=200)
 
     X_pop, y_pop = result.population
@@ -104,13 +103,13 @@ def test_actions_exclude_measurements(fitted):
             assert is_controllable(action.param), f"계측값이 조치안에 들어갔다: {action.param}"
 
 
-def test_counter_param_gets_pm_action():
+def test_counter_param_gets_pm_action(make_fdc):
     """카운터 파라미터는 규격 강화가 아니라 PM 주기 단축으로 나와야 한다 ★.
 
     왜: `pad_life`(누적 처리량)를 "1000~1100으로 유지하시오"라고 하면 말이 안 된다.
         카운터는 계속 증가하는 값이고, 조작 손잡이는 **언제 리셋하느냐**뿐이다.
     """
-    fdc, case, control = _make_fdc(culprit="chamber_pressure", shift=2.5, seed=23)
+    fdc, case, control = make_fdc(culprit="chamber_pressure", shift=2.5, seed=23)
     # CMP 스텝의 실제 카운터 파라미터 이름으로 바꿔 단다 (P050의 pad_life)
     fdc = fdc.rename(columns={"chamber_pressure_mean": "pad_life_mean",
                               "chamber_pressure_std": "pad_life_std"})
@@ -132,13 +131,13 @@ def test_weak_evidence_is_labeled(fitted):
     assert all(label in {"강함", "보통"} or label.startswith("약함") for label in labels)
 
 
-def test_low_auc_triggers_sampling_action():
+def test_low_auc_triggers_sampling_action(make_fdc):
     """모델이 신호를 못 잡으면 규격을 조이는 대신 데이터를 더 모으라고 해야 한다 ★★.
 
     왜 이게 중요한가: 근거가 약할 때 개선안을 내는 것은 **근거 없는 규제**다.
         현장에서 지켜지지도 않고, 분석의 신뢰만 잃는다. "모른다"고 말할 수 있어야 한다.
     """
-    fdc, case, control = _make_fdc(culprit="none", shift=0.0, seed=24)
+    fdc, case, control = make_fdc(culprit="none", shift=0.0, seed=24)
     result = cause_model.fit(fdc, "P020", "P", case, control)
     actions = recommend.build_actions(
         attribution.build_evidence(result, fdc, case, control), result
