@@ -33,3 +33,6 @@ shap>=0.44
 # 시각화
 plotly>=5.18
 matplotlib>=3.8
+
+# 스크린샷 검증 (개발용) — Chromium은 환경에 이미 설치돼 있다
+# playwright>=1.40
