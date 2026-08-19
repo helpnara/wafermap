@@ -64,6 +64,9 @@ class CauseModelResult:
         auc: 교차검증 AUC — 모델이 신호를 잡았는지 보는 지표
         n_case, n_control: 표본 수
         direction: 파라미터별 이탈 방향 (+1=높을수록 불량, -1=낮을수록 불량)
+        booster: 학습된 LightGBM 모델 — M5 반사실 시뮬레이션에서 재예측에 쓴다
+        X_all, y_all: SHAP 샘플링 이전의 **전체** 표본. 반사실 시뮬레이션은
+            모집단 분포에서 돌려야 하므로 층화 샘플링된 X를 쓰면 안 된다
     """
 
     step_id: str
@@ -77,6 +80,21 @@ class CauseModelResult:
     n_case: int
     n_control: int
     direction: dict[str, int] = field(default_factory=dict)
+    booster: object | None = None
+    X_all: pd.DataFrame | None = None
+    y_all: np.ndarray | None = None
+
+    @property
+    def population(self) -> tuple[pd.DataFrame, np.ndarray]:
+        """반사실 시뮬레이션에 쓸 모집단 (전체 표본이 있으면 그것을 쓴다).
+
+        왜 구분하나 ★: `X`는 SHAP 계산 속도를 위해 **불량을 과대 표집한** 부분집합이다.
+            여기서 불량률을 계산하면 실제보다 훨씬 높게 나온다. 기대효과를 추정할 때는
+            반드시 원래 분포를 써야 한다.
+        """
+        if self.X_all is not None and self.y_all is not None:
+            return self.X_all, self.y_all
+        return self.X, self.y
 
     def top_features(self, n: int = 5) -> list[str]:
         """기여도 상위 n개 파라미터."""
@@ -284,6 +302,9 @@ def fit(
         n_case=n_case,
         n_control=n_control,
         direction=direction,
+        booster=final,
+        X_all=X,
+        y_all=y,
     )
 
 
