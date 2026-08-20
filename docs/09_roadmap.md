@@ -1,6 +1,6 @@
 # 남은 작업 목록 (Roadmap)
 
-최종 갱신: 2026-08-19 · 브랜치 `claude/semiconductor-eds-model-design-1hfzrk`
+최종 갱신: 2026-08-20 · 브랜치 `claude/semiconductor-eds-model-design-1hfzrk`
 
 ---
 
@@ -21,8 +21,8 @@ M7 검증·배포      ████░░░░░░░░░░░░░░░
 |---|---|---|---|
 | M1 데이터 | ✅ | 합성 맵 6,000장 + FDC 54,000행 + 정답지 | 라벨 분포 WM-811K 일치, 인과 신호 +1.2~4.0σ |
 | M2 패턴 분류 | ✅ | 기하·Radon 피처, LightGBM, CNN 대조군 | macro-F1 **0.973** (CNN 0.946) |
-| M3 이상·설비 | ✅ | p-chart SPC, 커미널리티(Fisher·OR·FDR·CMH) | 원인 챔버 Top-1 **100%**, SPC 검출 58~83% |
-| M4 원인 파라미터 | ✅ | LightGBM+SHAP, 분포 증거, 조치가능 필터 | Top-1 83% · **Top-3 100%**, 평균 AUC 0.947 |
+| M3 이상·설비 | ✅ | p-chart SPC, 커미널리티(Fisher·OR·FDR·CMH) | 원인 챔버 Top-1 **67% ± 17%** · Top-3 90% ± 12% (시드 8개) |
+| M4 원인 파라미터 | ✅ | LightGBM+SHAP, 분포 증거, 조치가능 필터 | Top-1 75% ± 8% · **Top-3 100% ± 0%** (시드 4개) |
 | M5 개선안·ROI | ✅ | 조치안·반사실·ROI + 화면 1개 | 실행 가능성 제약(이동 20%) 반영 |
 | M5.5-① 검사 설비 축 | ✅ | Prober/Probe Card/ATE, 축별 분석 | 검사 설비 Top-1 2/2 |
 | M5.5-② 시계열 피처 | ✅ | slope/time_above/n_excursions 등 6종 | 스파이크↔드리프트 0.901→**0.969** |
