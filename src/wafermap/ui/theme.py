@@ -14,13 +14,22 @@ GOOD = "#1f6feb"
 WARN = "#d97706"
 BAD = "#c2410c"
 MUTED = "#6b7280"
+
+# 채우기용 색과 글자용 색을 나눈다 ★
+#   WCAG는 그래픽(막대·선)에 3:1, 본문 글자에 4.5:1을 요구한다. 기준이 다르므로
+#   같은 "주황"을 둘 다에 쓰면 한쪽이 반드시 어긋난다. 실제로 WARN(#d97706)은
+#   흰 배경에서 3.19:1 — 막대로는 충분하지만 글자로는 미달이었다.
+#   그래서 차트 채우기는 WARN을, 글자·배지는 아래 값을 쓴다.
+WARN_TEXT = "#9a3412"   # 흰 배경 7.31:1
+MID_TEXT = "#2563eb"    # 흰 배경 5.17:1 (연한 파랑 #3b82f6은 3.68:1로 미달이었다)
+TABLE_HEAD_TEXT = "#4b5563"  # 표 머리 배경(#f3f4f6) 위 6.87:1
 SURFACE = "#f4f6fa"
 BORDER = "#dfe3ea"
 
 #: 근거 강도 → (색, 기호). 색만으로 판단하지 않도록 기호를 함께 준다.
 EVIDENCE_STYLE: dict[str, tuple[str, str]] = {
     "강함": (GOOD, "●●●"),
-    "보통": ("#3b82f6", "●●○"),
+    "보통": (MID_TEXT, "●●○"),
     "—": (MUTED, "○○○"),
 }
 
@@ -30,7 +39,7 @@ def evidence_style(label: str) -> tuple[str, str]:
     for key, style in EVIDENCE_STYLE.items():
         if label.startswith(key):
             return style
-    return (WARN, "●○○")  # "약함 — …"
+    return (WARN_TEXT, "●○○")  # "약함 — …"
 
 
 CSS = f"""
@@ -65,7 +74,7 @@ CSS = f"""
   .wm-dict {{ width: 100%; border-collapse: collapse; font-size: .84rem; }}
   .wm-dict th {{
     text-align: left; padding: .4rem .6rem; background: #f3f4f6;
-    color: {MUTED}; font-weight: 600; font-size: .78rem; white-space: nowrap;
+    color: {TABLE_HEAD_TEXT}; font-weight: 600; font-size: .78rem; white-space: nowrap;
   }}
   .wm-dict td {{
     padding: .45rem .6rem; border-top: 1px solid #e5e7eb;

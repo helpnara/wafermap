@@ -63,9 +63,9 @@ def _axis_block(axes: list[dict], truth: dict) -> None:
         return
     for axis in axes:
         buried = axis["rank_overall"] > 5
-        color = theme.WARN if buried else theme.GOOD
+        color = theme.WARN_TEXT if buried else theme.GOOD
         note = (
-            f'<div class="wm-row" style="color:{theme.WARN}">'
+            f'<div class="wm-row" style="color:{theme.WARN_TEXT}">'
             f'⚠️ 통합 랭킹 {axis["rank_overall"]}위 — 축을 나누지 않았다면 못 봤다</div>'
             if buried else
             f'<div class="wm-row" style="color:{theme.MUTED}">통합 랭킹 {axis["rank_overall"]}위</div>'

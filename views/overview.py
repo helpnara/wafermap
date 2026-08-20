@@ -90,7 +90,7 @@ def _label_chart(counts: dict[str, int]) -> None:
 def _milestone_card(item: milestones.Milestone) -> None:
     rows = []
     for metric in item.metrics:
-        warn = "" if metric.robust else theme.badge("시드 의존", theme.WARN)
+        warn = "" if metric.robust else theme.badge("시드 의존", theme.WARN_TEXT)
         detail = f' <span style="color:{theme.MUTED}">· {metric.detail}</span>' if metric.detail else ""
         rows.append(
             f'<div class="wm-row"><b>{metric.label}</b> — '
@@ -217,7 +217,7 @@ OVERVIEW_CSS = """
   .wm-flow-title { font-weight:700; font-size:.9rem; color:#111827; }
   .wm-flow-sub { font-size:.74rem; color:#6b7280; margin-top:.15rem; line-height:1.35; }
   .wm-flow-arrow {
-    display:flex; align-items:center; color:#9ca3af; font-size:1.1rem; padding:0 .1rem;
+    display:flex; align-items:center; color:#6b7280; font-size:1.1rem; padding:0 .1rem;
   }
   @media (max-width: 640px) {
     .wm-flow-step { padding:.55rem; }
