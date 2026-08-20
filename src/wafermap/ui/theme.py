@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import re
+
 # 파랑(양호) ↔ 주황(위험) — 적록 색약에서도 구분되는 축
 GOOD = "#1f6feb"
 WARN = "#d97706"
@@ -90,3 +92,13 @@ def badge(text: str, color: str, *, bg: str | None = None) -> str:
     """색 배지 HTML."""
     background = bg or f"{color}18"
     return f'<span class="wm-badge" style="color:{color};background:{background}">{text}</span>'
+
+
+def html(text: str) -> str:
+    """백엔드 문구의 마크다운 굵게(**)를 HTML 태그로 바꾼다.
+
+    왜 필요한가: 분석 모듈이 만드는 문구는 콘솔·문서에서도 그대로 쓰이므로 마크다운
+        으로 강조를 넣는다. 그런데 `unsafe_allow_html` 로 감싼 div 안에서는 마크다운이
+        해석되지 않아 별표가 그대로 노출된다. 변환은 표시 계층의 책임이다.
+    """
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", str(text))

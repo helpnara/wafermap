@@ -8,8 +8,6 @@
 
 from __future__ import annotations
 
-import re
-
 import pandas as pd
 import streamlit as st
 
@@ -17,16 +15,6 @@ from wafermap.analysis import recommend
 from wafermap.ui import artifacts, layout, theme
 
 SOURCE = "synthetic"
-
-
-def _html(text: str) -> str:
-    """백엔드 문구의 마크다운 굵게(**)를 HTML 태그로 바꾼다.
-
-    왜 필요한가: 분석 모듈의 문구는 콘솔·문서에서도 그대로 쓰이므로 마크다운으로
-        강조를 넣는다. 그런데 `unsafe_allow_html` 로 감싼 div 안에서는 마크다운이
-        해석되지 않아 별표가 그대로 보인다. 표시 계층에서 변환하는 것이 맞다.
-    """
-    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", str(text))
 
 
 @st.cache_data(show_spinner="분석 결과를 불러오는 중…")
@@ -56,8 +44,8 @@ def _action_card(action: dict) -> None:
         theme.badge(f'근거 {mark} {action["evidence"]}', color),
         theme.badge(f'난이도 {action["effort"]}', theme.MUTED),
     ])
-    current, proposed = _html(action["current"]), _html(action["proposed"])
-    rationale = _html(action["rationale"])
+    current, proposed = theme.html(action["current"]), theme.html(action["proposed"])
+    rationale = theme.html(action["rationale"])
 
     st.markdown(
         f'<div class="wm-card">'
@@ -272,7 +260,7 @@ def render() -> None:
                 )
                 for note in cf["caveats"]:
                     st.markdown(
-                        f'<div class="wm-note">{_html(note)}</div>', unsafe_allow_html=True)
+                        f'<div class="wm-note">{theme.html(note)}</div>', unsafe_allow_html=True)
 
             st.divider()
             st.subheader("ROI")

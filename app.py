@@ -32,9 +32,11 @@ from wafermap.ui import layout  # noqa: E402
 PAGE_SPECS = [
     ("views/overview.py", "개요", "🏠"),
     ("views/explorer.py", "웨이퍼맵 탐색", "🗺️"),
+    ("views/classification.py", "패턴 분류 모델", "🏷️"),
     ("views/detection.py", "이상공정 탐지", "📉"),
     ("views/rootcause.py", "원인 분석", "🔬"),
     ("views/improvement.py", "개선방안·기대효과", "🎯"),
+    ("views/validation.py", "모델 검증", "✅"),
     ("views/glossary.py", "용어사전", "📖"),
     ("views/learning.py", "도움말·학습", "🎓"),
 ]
