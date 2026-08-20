@@ -219,7 +219,8 @@ def test_cnn_model_shapes_and_size():
 
     out = model(torch.randn(4, 2, pattern_cnn.IMG_SIZE, pattern_cnn.IMG_SIZE))
     assert out.shape == (4, len(PATTERN_LABELS))
-    # 설계 목표: 약 20만 파라미터 (§4.3 클라우드 배포 요건)
+    # 설계 목표: 약 20만 파라미터.
+    # 배포를 범위에서 뺀 뒤로는 LightGBM과의 공정한 대조가 이 상한의 근거다.
     assert 100_000 < n_params < 400_000, f"파라미터 규모가 설계와 다름: {n_params:,}"
 
 

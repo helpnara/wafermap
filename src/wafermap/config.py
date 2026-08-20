@@ -27,7 +27,6 @@ DATA_DIR = PROJECT_ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"              # LSWMD.pkl 등 원본 (git 제외)
 INTERIM_DIR = DATA_DIR / "interim"      # 중간 산출물 (git 제외)
 PROCESSED_DIR = DATA_DIR / "processed"  # 분석용 parquet (git 제외)
-SAMPLE_DIR = DATA_DIR / "sample"        # 클라우드 배포용 소형 샘플 (git 포함)
 
 MODELS_DIR = PROJECT_ROOT / "models"
 DOCS_DIR = PROJECT_ROOT / "docs"
