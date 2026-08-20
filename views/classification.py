@@ -179,7 +179,7 @@ def render() -> None:
         st.subheader("LightGBM vs 경량 CNN")
         cnn_report = cnn["report"]
         layout.metric_grid([
-            ("LightGBM macro-F1", f"{report['macro_f1']:.4f}", "기하 피처 121종"),
+            ("LightGBM macro-F1", f"{report['macro_f1']:.4f}", "기하 피처 99종"),
             ("CNN macro-F1", f"{cnn_report['macro_f1']:.4f}",
              f"이미지 {cnn.get('img_size', '?')}px 직접 입력"),
         ], desktop_cols=2)

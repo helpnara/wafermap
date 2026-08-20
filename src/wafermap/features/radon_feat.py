@@ -57,22 +57,22 @@ def extract(wafer: np.ndarray) -> dict[str, float]:
         wafer: (rows, cols) 배열. 0=die 없음, 1=pass, 2=fail
 
     Returns:
-        피처명 → 값 딕셔너리 (약 46개: 평균 20 + 표준편차 20 + 요약 6)
+        피처명 → 값 딕셔너리 (26개: 각도별 변동계수 20 + 요약 6)
     """
     from skimage.transform import radon
 
     fail = (wafer == DIE_FAIL).astype(np.float64)
 
-    empty = {}
-    empty.update({f"radon_mean_{i}": 0.0 for i in range(N_INTERP)})
-    empty.update({f"radon_std_{i}": 0.0 for i in range(N_INTERP)})
+    # 불량이 거의 없어 Radon을 못 돌리는 경우의 기본값.
+    # ★ 여기 키 목록은 아래 정상 경로가 내보내는 키와 **정확히 같아야** 한다.
+    #   어긋나면 웨이퍼마다 피처 컬럼이 달라져 결측이 생긴다.
+    empty = {f"radon_cv_{i}": 0.0 for i in range(N_INTERP)}
     empty.update(
         {
             "radon_peak_angle": 0.0,
             "radon_peak_sharpness": 0.0,
             "radon_angular_contrast": 0.0,
-            "radon_mean_range": 0.0,
-            "radon_std_range": 0.0,
+            "radon_cv_range": 0.0,
             "radon_peak_to_median": 0.0,
             "radon_isotropy": 0.0,
         }
@@ -91,21 +91,30 @@ def extract(wafer: np.ndarray) -> dict[str, float]:
 
     total = fail.sum()
 
-    # ⚠️ 불량 개수로 나눠 정규화한다.
-    # 왜: Radon 투영은 픽셀 값의 '합'이라 불량이 많을수록, 맵이 클수록 값이 커진다.
-    #     정규화하지 않으면 이 피처들이 사실상 "불량 개수"와 "맵 크기"를 인코딩하게 되어,
-    #     모델이 형상 대신 그 지름길을 학습한다(geometry.basic_features의 경고와 같은 문제).
-    col_mean = col_mean / total
-    col_std = col_std / total
-    col_max_n = col_max / total
+    # ⚠️ 불량 개수로 나누는 것만으로는 부족하다 ★
+    #
+    # 어떤 각도에서 보든 그림자의 **합은 항상 불량 개수와 같다**(같은 픽셀을 방향만
+    # 바꿔 더하는 것이므로). 그래서 열평균은 정의상
+    #       col_mean = total / 검출기_길이
+    # 이고, 여기서 total로 나누면 남는 것은 `1 / 검출기_길이` — 즉 **맵 크기 하나뿐**이다.
+    # 패턴 정보가 0인 값이 20개 피처로 들어가 있었다. 합성 데이터는 맵이 전부
+    # 34×67이라 이 값이 상수여서 모델이 무시했고, 그래서 지금까지 드러나지 않았다.
+    # 실측 WM-811K는 맵 크기가 제각각이라 그대로 두면 "맵 크기 지름길"이 된다.
+    #
+    # 올바른 정규화는 total이 아니라 **그 각도의 평균으로 나누는 것**이다. 그러면
+    # 변동계수(CV)가 되어 검출기 길이가 약분된다 — 크기와 무관하게 "얼마나 뭉쳤나"만 남는다.
+    scale = col_mean.mean() + 1e-12
+    col_cv = col_std / (col_mean + 1e-12)      # 각도별 투영의 뾰족함 (무차원)
+    col_max_n = col_max / scale                # 최대 그림자의 상대 높이 (무차원)
 
     out: dict[str, float] = {}
     # 각도축을 따라 정렬한 뒤 리샘플링 — 회전에 불변인 표현이 된다.
     # (웨이퍼는 스크래치가 어느 방향으로든 날 수 있으므로 절대 각도는 의미가 없다)
-    for i, v in enumerate(_resample(np.sort(col_mean), N_INTERP)):
-        out[f"radon_mean_{i}"] = float(v)
-    for i, v in enumerate(_resample(np.sort(col_std), N_INTERP)):
-        out[f"radon_std_{i}"] = float(v)
+    #
+    # radon_mean_* 은 위의 이유로 없앴다. 정규화로 살릴 수 있는 값이 아니라
+    # 애초에 정보가 없는 값이라 지우는 것이 맞다.
+    for i, v in enumerate(_resample(np.sort(col_cv), N_INTERP)):
+        out[f"radon_cv_{i}"] = float(v)
 
     peak_idx = int(np.argmax(col_max))
 
@@ -113,12 +122,14 @@ def extract(wafer: np.ndarray) -> dict[str, float]:
         {
             # 투영이 가장 뾰족해지는 각도 (0~1로 정규화)
             "radon_peak_angle": float(peak_idx / N_ANGLES),
-            # 그 각도에서 얼마나 뭉쳤나 — 선형 구조일수록 크다
-            "radon_peak_sharpness": float(col_max.max() / (total + 1e-6)),
-            # 각도 간 최대/최소 대비 — 방향성이 있으면 크고, 등방적이면 1에 가깝다
+            # 그 각도에서 얼마나 뭉쳤나 — 선형 구조일수록 크다.
+            # total이 아니라 평균 그림자 높이로 나눈다(위 주석의 이유).
+            "radon_peak_sharpness": float(col_max.max() / scale),
+            # 각도 간 최대/최소 대비 — 방향성이 있으면 크고, 등방적이면 1에 가깝다.
+            # 이미 같은 단위끼리의 비라서 맵 크기가 약분된다.
             "radon_angular_contrast": float(col_max.max() / (col_max.min() + 1e-6)),
-            "radon_mean_range": float(col_mean.max() - col_mean.min()),
-            "radon_std_range": float(col_std.max() - col_std.min()),
+            # radon_mean_range 는 없앴다 — 상수의 범위라 항상 0에 가깝다.
+            "radon_cv_range": float(col_cv.max() - col_cv.min()),
             # 상위/하위 각도 대비 (정규화 값 기준)
             "radon_peak_to_median": float(col_max_n.max() / (np.median(col_max_n) + 1e-9)),
             # 등방성: 각도에 따른 변동이 작을수록 1에 가깝다 (Center/Donut 계열)

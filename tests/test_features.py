@@ -128,14 +128,18 @@ def test_cluster_features_are_normalized(geom, rng):
 def test_radon_features_are_normalized(geom, rng):
     """Radon 피처가 불량 개수에 비례해 커지면 안 된다.
 
-    Near-full(불량 수천 개)과 Loc(불량 수십 개)의 radon_mean 값이 자릿수 차이로
-    벌어지면, 그 피처는 형상이 아니라 불량 개수를 인코딩하고 있는 것이다.
+    Near-full(불량 수천 개)과 Loc(불량 수십 개)의 값이 자릿수 차이로 벌어지면,
+    그 피처는 형상이 아니라 불량 개수를 인코딩하고 있는 것이다.
+
+    피처명이 radon_mean_* 에서 radon_cv_* 로 바뀐 이유는
+    `tests/test_resolution_invariance.py` 에 적혀 있다 — 열평균은 정의상
+    `불량수 / 검출기길이` 라서 정규화해도 맵 크기만 남는 값이었다.
     """
     few = radon_feat.extract(generate_wafer_map("Loc", rng, geom))
     many = radon_feat.extract(generate_wafer_map("Near-full", rng, geom))
-    a, b = few["radon_mean_10"], many["radon_mean_10"]
+    a, b = few["radon_cv_10"], many["radon_cv_10"]
     assert max(a, b) / max(min(a, b), 1e-9) < 30, (
-        f"radon_mean이 불량 개수에 비례함: Loc={a:.4f} vs Near-full={b:.4f}"
+        f"radon_cv가 불량 개수에 비례함: Loc={a:.4f} vs Near-full={b:.4f}"
     )
 
 
@@ -212,7 +216,9 @@ def test_build_produces_expected_columns(geom, rng):
     assert len(df) == 4
     assert "wafer_id" in df.columns
     feature_cols = build.feature_columns(df)
-    assert len(feature_cols) > 100, f"피처가 예상보다 적음: {len(feature_cols)}"
+    # 121개였다가 99개가 됐다 — 맵 크기만 인코딩하던 피처 22개를 걷어냈다.
+    # (radon_mean_* 20개 + radon_mean_range + die_fill_ratio)
+    assert len(feature_cols) == 99, f"피처 수가 바뀜: {len(feature_cols)}"
     assert df[feature_cols].isna().sum().sum() == 0
     assert np.isfinite(df[feature_cols].to_numpy()).all()
 

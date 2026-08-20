@@ -49,9 +49,9 @@ MILESTONES: tuple[Milestone, ...] = (
         key="M2",
         title="패턴 분류",
         question="어떤 불량 패턴인가?",
-        method="기하·Radon 피처 121종 + LightGBM (CNN 대조군)",
+        method="기하·Radon 피처 99종 + LightGBM (CNN 대조군)",
         metrics=(
-            Metric("macro-F1", "0.974", "5-fold 교차검증"),
+            Metric("macro-F1", "0.973", "5-fold 교차검증"),
             Metric("CNN 대조군", "0.946", "103배 느림"),
         ),
         reproduce="python scripts/train_pattern_model.py",

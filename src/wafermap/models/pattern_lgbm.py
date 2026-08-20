@@ -1,6 +1,6 @@
 """LightGBM 패턴 분류 모델 — 9종 불량 패턴을 판정한다.
 
-무엇을: 121개 기하 피처를 입력으로 받아 wafer map의 불량 패턴을 분류한다.
+무엇을: 99개 기하 피처를 입력으로 받아 wafer map의 불량 패턴을 분류한다.
 
 가장 어려운 점 — **극심한 클래스 불균형**:
     none 85.25% (5,115장)  vs  Near-full 0.08% (5장)  → 약 1,000 : 1
@@ -31,7 +31,7 @@ from wafermap.config import MODELS_DIR, PATTERN_LABELS
 MODEL_FILE = "pattern_lgbm.txt"
 META_FILE = "pattern_lgbm_meta.json"
 
-#: 학습 기본 하이퍼파라미터. 데이터가 작고(수천 장) 피처가 많아(121개)
+#: 학습 기본 하이퍼파라미터. 데이터가 작고(수천 장) 피처가 많아(99개)
 #: 과적합이 쉬우므로 보수적으로 잡았다.
 DEFAULT_PARAMS: dict[str, object] = {
     "objective": "multiclass",

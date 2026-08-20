@@ -26,6 +26,10 @@ import numpy as np
 from wafermap.config import DIE_FAIL, DIE_NONE
 
 #: 반경 프로파일을 나눌 동심 링 개수
+#: 비율 피처의 상한. 분모가 0에 가까울 때 값이 발산하는 것을 막는다.
+#: 트리 모델은 순서만 보므로 상한을 두어도 "안쪽이 훨씬 깨끗하다"는 정보는 남는다.
+MAX_RATIO = 50.0
+
 N_RINGS = 10
 #: 각도 프로파일을 나눌 섹터 개수
 N_SECTORS = 12
@@ -106,16 +110,14 @@ def basic_features(wafer: np.ndarray, geom: MapGeometry) -> dict[str, float]:
         합성 데이터는 맵 크기가 모두 같아 이 문제가 드러나지 않으므로, 실측으로
         넘어가기 전에 구조적으로 막아 둔다.
 
-    die_fill_ratio는 크기가 아니라 **모양** 지표라 남긴다(원판을 얼마나 채웠는가,
-    완전한 원이면 약 π/4 ≈ 0.785).
+    die_fill_ratio도 뺐다 ★: "원판을 얼마나 채웠는가"라는 모양 지표로 넣었는데,
+        해상도 불변성을 재 보니 **네 패턴에서 값이 완전히 같았다**(0.6953). 패턴이
+        아니라 격자를 어떻게 이산화했는지만 반영한다. 남겨 두면 실측에서 맵 크기
+        지름길이 된다.
     """
     n_die = geom.n_die
     n_fail = int(np.count_nonzero(wafer == DIE_FAIL))
-    rows, cols = wafer.shape
-    return {
-        "fail_ratio": n_fail / n_die if n_die else 0.0,
-        "die_fill_ratio": n_die / (rows * cols) if rows * cols else 0.0,
-    }
+    return {"fail_ratio": n_fail / n_die if n_die else 0.0}
 
 
 def radial_features(wafer: np.ndarray, geom: MapGeometry) -> dict[str, float]:
@@ -148,11 +150,15 @@ def radial_features(wafer: np.ndarray, geom: MapGeometry) -> dict[str, float]:
             "radial_peak_value": float(profile.max()),
             "radial_std": float(profile.std()),
             "radial_slope": float(np.polyfit(np.arange(N_RINGS), profile, 1)[0]),
-            "edge_inner_ratio": float(outer / (inner + 1e-6)),
+            # ⚠️ 안쪽 링에 불량이 하나도 없으면 1e-6으로 나뉘어 값이 폭주한다.
+            #    실제로 격자가 성기면 12,070 같은 값이 나왔다. 맵이 작을수록 안쪽
+            #    링의 die 수가 적어 0이 되기 쉬우므로 실측에서 더 자주 터진다.
+            #    "안쪽이 깨끗하다"는 정보는 상한에서 이미 다 표현되므로 잘라 둔다.
+            "edge_inner_ratio": float(min(outer / (inner + 1e-6), MAX_RATIO)),
             # 최외곽 2링 vs 나머지 — Edge-Ring 전용 지표
-            "outer2_ratio": float(profile[-2:].mean() / (profile[:-2].mean() + 1e-6)),
+            "outer2_ratio": float(min(profile[-2:].mean() / (profile[:-2].mean() + 1e-6), MAX_RATIO)),
             # 중심 2링이 비었는지 — Donut을 Center와 가르는 지표
-            "center2_ratio": float(profile[:2].mean() / (profile.mean() + 1e-6)),
+            "center2_ratio": float(min(profile[:2].mean() / (profile.mean() + 1e-6), MAX_RATIO)),
         }
     )
     return out
@@ -233,6 +239,25 @@ def zone13_features(wafer: np.ndarray, geom: MapGeometry) -> dict[str, float]:
     return out
 
 
+def _isotropic(image: np.ndarray, geom: MapGeometry) -> np.ndarray:
+    """웨이퍼의 경계 상자가 정사각이 되도록 다시 표본화한다.
+
+    왜 필요한가: die가 정사각이 아니면 맵도 그만큼 늘어난 격자가 된다. 모양을 재는
+        피처(Hu 모멘트·이방성)를 그 격자에서 바로 계산하면 **die 종횡비가 모양으로
+        오인된다.** 여기서 한 번 등방으로 맞춰 두면 그 성분이 사라진다.
+
+    최근접 표본화를 쓴다 — 불량 여부(0/1)만 보므로 보간할 값이 없다.
+    """
+    rows, cols = np.nonzero(geom.mask)
+    if rows.size == 0:
+        return image
+    r0, r1, c0, c1 = rows.min(), rows.max(), cols.min(), cols.max()
+    side = max(r1 - r0 + 1, c1 - c0 + 1)
+    r_idx = np.linspace(r0, r1, side).round().astype(int)
+    c_idx = np.linspace(c0, c1, side).round().astype(int)
+    return image[np.ix_(r_idx, c_idx)]
+
+
 def moment_features(wafer: np.ndarray, geom: MapGeometry) -> dict[str, float]:
     """Hu 모멘트와 형상 지표 — 불량 분포의 '모양'을 요약한다.
 
@@ -251,7 +276,14 @@ def moment_features(wafer: np.ndarray, geom: MapGeometry) -> dict[str, float]:
         out.update({"fail_centroid_r": 0.0, "fail_spread": 0.0, "fail_anisotropy": 0.0})
         return out
 
-    mu = moments_central(fail)
+    # ★ 화소 격자가 아니라 **등방 좌표**에서 모멘트를 낸다.
+    #   Hu 모멘트는 이동·회전·크기에 불변이지만 **종횡비에는 불변이 아니다.** 이
+    #   프로젝트의 die는 4.5×9.0mm라 세로로 2배 늘어난 격자인데, 그 상태로 모멘트를
+    #   내면 "웨이퍼가 세로로 길다"가 모양 정보에 섞인다. 합성 데이터는 die 크기가
+    #   하나뿐이라 이 성분이 상수여서 보이지 않았다. 실측은 맵마다 종횡비가 달라
+    #   그대로 두면 지름길이 된다. 실측(fail_anisotropy 기준): 정사각 격자 0.02~0.05,
+    #   2:1 격자 0.61 — 패턴 차이(0.49~0.61)보다 큰 변동이었다.
+    mu = moments_central(_isotropic(fail, geom))
     try:
         hu = moments_hu(moments_normalized(mu))
     except (ValueError, ZeroDivisionError):
