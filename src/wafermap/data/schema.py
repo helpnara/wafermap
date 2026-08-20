@@ -27,6 +27,9 @@ class Column:
         nullable: 결측 허용 여부
         allowed: 허용 값 집합 (범주형 컬럼에만 사용)
         min_value, max_value: 수치 범위 제약
+        note: 이 컬럼이 무엇이고 왜 필요한지 한 줄 설명. 화면의 데이터 사전이 이 값을
+            그대로 읽어 쓴다. 설명을 뷰에 따로 적으면 스키마가 바뀔 때 둘이 어긋나므로
+            규격 옆에 둔다.
     """
 
     name: str
@@ -35,6 +38,7 @@ class Column:
     allowed: frozenset[str] | None = None
     min_value: float | None = None
     max_value: float | None = None
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,25 +65,41 @@ WAFER_MASTER = TableSchema(
     name="wafer_master",
     unique_key=("wafer_id",),
     columns=(
-        Column("wafer_id", "str"),
-        Column("lot_id", "str"),
-        Column("slot_no", "int", min_value=1, max_value=25),
-        Column("product", "str"),
-        Column("tech_node", "str"),
-        Column("fab_in_time", "datetime"),
-        Column("eds_time", "datetime"),
+        Column("wafer_id", "str",
+               note="웨이퍼 1장의 고유 ID. `<lot_id>-W<슬롯>` 형식이라 ID만 봐도 소속 lot을 안다"),
+        Column("lot_id", "str",
+               note="묶음 ID. 팹은 웨이퍼 25장을 한 카세트에 넣어 함께 흘린다 — 같은 lot은 같은 설비를 지났을 확률이 높아 커미널리티의 기본 층이 된다"),
+        Column("slot_no", "int", min_value=1, max_value=25,
+               note="카세트 안 위치(1~25). 슬롯별로 열·가스 흐름이 미세하게 달라 슬롯 편향이 생길 수 있다"),
+        Column("product", "str",
+               note="제품명. 이 프로젝트는 DDR5 16Gb 단일 제품이다"),
+        Column("tech_node", "str",
+               note="공정 세대(1z-nm). 세대가 다르면 규격도 불량 기준도 달라 섞어서 분석하면 안 된다"),
+        Column("fab_in_time", "datetime",
+               note="팹 투입 시각. EDS 시각에서 이만큼을 빼야 '언제 만들어졌는가'가 나온다"),
+        Column("eds_time", "datetime",
+               note="EDS 검사 시각. 관리도의 시간축이며, 사이클 타임만큼 공정 시각과 어긋난다"),
         # 검사 설비 — 불량이 공정이 아니라 검사에서 왔을 가능성을 판별하는 축(§2.5-A).
         # 실측 WM-811K에는 없는 정보라 nullable로 둔다.
-        Column("tester_id", "str", nullable=True),
-        Column("probe_card_id", "str", nullable=True),
-        Column("probe_touchdown", "int", nullable=True, min_value=0),
-        Column("die_total", "int", min_value=1),
-        Column("die_pass", "int", min_value=0),
-        Column("yield_pct", "float", min_value=0.0, max_value=100.0),
-        Column("pattern_label", "str", allowed=frozenset(PATTERN_LABELS)),
-        Column("data_source", "str", allowed=frozenset({"real", "synthetic"})),
+        Column("tester_id", "str", nullable=True,
+               note="검사에 쓴 ATE 장비. 불량이 공정이 아니라 검사에서 왔을 가능성을 가르는 축이다"),
+        Column("probe_card_id", "str", nullable=True,
+               note="웨이퍼에 바늘을 대는 프로브 카드. 바늘이 닳으면 접촉 불량이 실제 불량처럼 찍힌다"),
+        Column("probe_touchdown", "int", nullable=True, min_value=0,
+               note="그 프로브 카드의 누적 접촉 횟수. 마모의 대리 지표이지만 시간과 함께 증가해 시각과 교락된다"),
+        Column("die_total", "int", min_value=1,
+               note="웨이퍼 위 전체 칩 수. 이 프로젝트는 원 안에 들어오는 1,584개다"),
+        Column("die_pass", "int", min_value=0,
+               note="합격 칩 수. 이 값과 die_total의 비가 수율이며, 불량 칩 수는 두 값의 차다"),
+        Column("yield_pct", "float", min_value=0.0, max_value=100.0,
+               note="수율(%) = die_pass / die_total × 100. 사업적으로 가장 중요한 하나의 숫자다"),
+        Column("pattern_label", "str", allowed=frozenset(PATTERN_LABELS),
+               note="불량 맵의 모양 이름(9종). 모양이 원인 공정을 가리키기 때문에 분류가 분석의 출발점이 된다"),
+        Column("data_source", "str", allowed=frozenset({"real", "synthetic"}),
+               note="합성인지 실측인지. 합성 성능은 상한선이므로 절대 섞어서 인용하면 안 된다"),
         # 미라벨 데이터 확장(백로그 §11)을 위해 1차부터 자리를 잡아 둔다.
-        Column("is_labeled", "bool"),
+        Column("is_labeled", "bool",
+               note="패턴 라벨이 달렸는가. 실데이터 WM-811K는 82만 장 중 17만 장만 라벨이 있다"),
     ),
 )
 
@@ -89,13 +109,20 @@ FDC_SUMMARY = TableSchema(
     # 파라미터 컬럼(<param>_mean 등)은 스텝마다 다르므로 추가 컬럼을 허용한다.
     allow_extra=True,
     columns=(
-        Column("wafer_id", "str"),
-        Column("step_id", "str"),
-        Column("step_name", "str"),
-        Column("equip_id", "str"),
-        Column("chamber_id", "str"),
-        Column("recipe_id", "str"),
-        Column("run_time", "datetime"),
+        Column("wafer_id", "str",
+               note="어느 웨이퍼가 이 설비를 지났는가"),
+        Column("step_id", "str",
+               note="공정 스텝 코드(P010~P080, T010 검사)"),
+        Column("step_name", "str",
+               note="스텝 이름(포토·식각·박막증착…)"),
+        Column("equip_id", "str",
+               note="설비 호기. 커미널리티가 '어느 호기가 불량에 몰렸는가'를 세는 단위다"),
+        Column("chamber_id", "str",
+               note="챔버(설비 안의 처리실). 같은 설비라도 챔버마다 상태가 달라 실제 원인은 대개 챔버 단위다"),
+        Column("recipe_id", "str",
+               note="적용한 레시피 버전. 레시피가 바뀌면 파라미터 분포가 통째로 이동한다"),
+        Column("run_time", "datetime",
+               note="이 스텝을 처리한 시각. EDS 시각이 아니라 이 시각으로 관리도를 그려야 원인 시점이 맞는다"),
     ),
 )
 
@@ -103,11 +130,16 @@ FDC_TRACE = TableSchema(
     name="fdc_trace",
     unique_key=("wafer_id", "step_id", "param", "t_sec"),
     columns=(
-        Column("wafer_id", "str"),
-        Column("step_id", "str"),
-        Column("param", "str"),
-        Column("t_sec", "float", min_value=0.0),
-        Column("value", "float"),
+        Column("wafer_id", "str",
+               note="wafer_master와 잇는 키. 한 웨이퍼가 스텝×파라미터×시각만큼 여러 행을 갖는다"),
+        Column("step_id", "str",
+               note="공정 스텝 코드"),
+        Column("param", "str",
+               note="센서 파라미터명(온도·유량·압력…)"),
+        Column("t_sec", "float", min_value=0.0,
+               note="스텝 시작 후 경과 시간(초). 60초를 60점으로 샘플링했다"),
+        Column("value", "float",
+               note="그 시각의 센서 값. 요약통계만으로는 3초 스파이크가 평균을 0.35σ밖에 못 움직여 묻힌다 — 그래서 원파형을 남긴다"),
     ),
 )
 
@@ -115,21 +147,33 @@ GROUND_TRUTH = TableSchema(
     name="ground_truth",
     unique_key=("wafer_id",),
     columns=(
-        Column("wafer_id", "str"),
-        Column("pattern_label", "str", allowed=frozenset(PATTERN_LABELS)),
+        Column("wafer_id", "str",
+               note="wafer_master와 1:1로 잇는 키. 정답지는 웨이퍼당 정확히 한 행이다"),
+        Column("pattern_label", "str", allowed=frozenset(PATTERN_LABELS),
+               note="이 웨이퍼에 실제로 심은 패턴"),
         # 원인이 없는 패턴(none/Random)은 결측이 정상이다.
-        Column("true_root_step", "str", nullable=True),
-        Column("true_root_equip", "str", nullable=True),
-        Column("true_root_params", "list", nullable=True),
-        Column("severity", "float", nullable=True, min_value=0.0),
-        Column("is_confounded", "bool"),
+        Column("true_root_step", "str", nullable=True,
+               note="진짜 원인 스텝. 원인이 없는 패턴(none/Random)은 결측이 정상이다"),
+        Column("true_root_equip", "str", nullable=True,
+               note="진짜 원인 설비/챔버(검사 기인이면 프로브 카드)"),
+        Column("true_root_params", "list", nullable=True,
+               note="진짜로 흔든 파라미터 목록. M4의 Top-5 포함률을 이걸로 채점한다"),
+        Column("severity", "float", nullable=True, min_value=0.0,
+               note="섭동 강도(σ 배수). 클수록 찾기 쉽다"),
+        Column("is_confounded", "bool",
+               note="다른 원인과 겹쳐 있는가 — 겹치면 단독 귀속이 불가능하다"),
         # 공정이 아니라 검사 설비가 원인인가 — 같은 맵 패턴의 두 번째 경로
-        Column("is_test_induced", "bool"),
+        Column("is_test_induced", "bool",
+               note="공정이 아니라 검사 설비가 원인인가. 같은 맵 모양의 두 번째 경로다"),
         # 이상의 모양이 순간 스파이크인가 — 요약통계로 잡히는지가 갈린다
-        Column("is_spike_induced", "bool"),
-        Column("cause_mechanism", "str"),
-        Column("is_unexplained", "bool"),
-        Column("is_false_positive", "bool"),
+        Column("is_spike_induced", "bool",
+               note="이상의 모양이 순간 스파이크인가. 요약통계로 잡히는지가 여기서 갈린다"),
+        Column("cause_mechanism", "str",
+               note="원인 경로(process/test/spike/drift/interaction). 경로가 다르면 찾는 방법도 달라야 한다"),
+        Column("is_unexplained", "bool",
+               note="원인을 심지 않았는데 불량인가 — 현실의 '원인 미상' 몫"),
+        Column("is_false_positive", "bool",
+               note="원인은 심었는데 불량이 안 난 경우 — 섭동이 항상 불량으로 이어지지는 않는다"),
     ),
 )
 

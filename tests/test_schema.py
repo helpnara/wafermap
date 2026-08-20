@@ -181,3 +181,33 @@ def test_consistency_detects_die_pass_exceeding_total():
     fdc = pd.DataFrame({"wafer_id": master["wafer_id"]})
     with pytest.raises(schema.SchemaError, match="die_pass > die_total"):
         schema.validate_consistency(master, fdc, gt)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 데이터 사전 — 화면이 스키마를 그대로 읽어 그리므로 설명이 비면 표가 빈다
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_every_column_has_a_note():
+    """모든 컬럼에 설명이 있어야 한다.
+
+    '데이터 개요' 화면의 데이터 사전은 이 note를 그대로 읽는다. 컬럼을 새로 추가하면서
+    설명을 빠뜨리면 화면에 빈 칸이 생기는데, 그것을 사람이 알아채기 어렵다.
+    """
+    missing = [
+        f"{name}.{col.name}"
+        for name, table in schema.ALL_SCHEMAS.items()
+        for col in table.columns
+        if not col.note.strip()
+    ]
+    assert not missing, f"설명이 없는 컬럼: {missing}"
+
+
+def test_note_does_not_repeat_the_column_name_only():
+    """설명이 컬럼명을 한글로 옮긴 것에 그치면 안 된다 — 최소한의 길이를 요구한다."""
+    too_short = [
+        f"{name}.{col.name}"
+        for name, table in schema.ALL_SCHEMAS.items()
+        for col in table.columns
+        if len(col.note) < 8
+    ]
+    assert not too_short, f"설명이 너무 짧은 컬럼: {too_short}"

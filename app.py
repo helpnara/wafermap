@@ -31,6 +31,7 @@ from wafermap.ui import layout  # noqa: E402
 #: (파일, 제목, 아이콘) — rail 모드에서는 제목을 아이콘으로 대체한다
 PAGE_SPECS = [
     ("views/overview.py", "개요", "🏠"),
+    ("views/data_overview.py", "데이터 개요", "🗄️"),
     ("views/explorer.py", "웨이퍼맵 탐색", "🗺️"),
     ("views/classification.py", "패턴 분류 모델", "🏷️"),
     ("views/detection.py", "이상공정 탐지", "📉"),

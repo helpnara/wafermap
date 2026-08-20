@@ -60,6 +60,24 @@ CSS = f"""
   .wm-assume {{ font-size: .73rem; color: {MUTED}; margin: -.5rem 0 .5rem 0; }}
 
   /* KPI 그리드 — st.metric은 좁은 화면에서 1열로 무너지므로 직접 그린다 */
+  /* 데이터 사전 — st.dataframe은 셀을 줄바꿈하지 않고 잘라 버린다.
+     여기서는 설명문 자체가 내용이라 잘리면 안 되므로 직접 표를 그린다. */
+  .wm-dict {{ width: 100%; border-collapse: collapse; font-size: .84rem; }}
+  .wm-dict th {{
+    text-align: left; padding: .4rem .6rem; background: #f3f4f6;
+    color: {MUTED}; font-weight: 600; font-size: .78rem; white-space: nowrap;
+  }}
+  .wm-dict td {{
+    padding: .45rem .6rem; border-top: 1px solid #e5e7eb;
+    vertical-align: top; line-height: 1.5;
+  }}
+  .wm-dict td.n {{ white-space: nowrap; font-family: ui-monospace, monospace; color: #111827; }}
+  .wm-dict td.s {{ white-space: nowrap; color: {MUTED}; font-size: .78rem; }}
+  .wm-dict tr:hover td {{ background: #fafafa; }}
+  @media (max-width: 640px) {{
+    /* 좁은 화면에서는 규격 열을 접고 이름과 설명만 남긴다 */
+    .wm-dict th:nth-child(4), .wm-dict td:nth-child(4) {{ display: none; }}
+  }}
   .wm-kpi {{
     display: grid; grid-template-columns: repeat(var(--wm-cols, 4), 1fr);
     gap: .55rem; margin: .2rem 0 .9rem 0;
@@ -95,10 +113,18 @@ def badge(text: str, color: str, *, bg: str | None = None) -> str:
 
 
 def html(text: str) -> str:
-    """백엔드 문구의 마크다운 굵게(**)를 HTML 태그로 바꾼다.
+    """평문 문구를 `unsafe_allow_html` 블록 안에 넣을 수 있는 HTML로 바꾼다.
+
+    세 가지를 한다:
+        1. `<`, `>`, `&` 를 이스케이프한다. 안 하면 `<lot_id>` 같은 문구가 브라우저에
+           태그로 먹혀 통째로 사라진다 — 데이터 사전에서 실제로 그랬다.
+        2. 마크다운 굵게(`**`)를 `<b>` 로 바꾼다.
+        3. 백틱 코드(`` ` ``)를 `<code>` 로 바꾼다.
 
     왜 필요한가: 분석 모듈이 만드는 문구는 콘솔·문서에서도 그대로 쓰이므로 마크다운
         으로 강조를 넣는다. 그런데 `unsafe_allow_html` 로 감싼 div 안에서는 마크다운이
-        해석되지 않아 별표가 그대로 노출된다. 변환은 표시 계층의 책임이다.
+        해석되지 않아 별표와 백틱이 그대로 노출된다. 변환은 표시 계층의 책임이다.
     """
-    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", str(text))
+    out = str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    out = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", out)
+    return re.sub(r"`([^`]+)`", r"<code>\1</code>", out)
