@@ -274,8 +274,8 @@ def render() -> None:
 
     try:
         catalog = _catalog(SOURCE)
-    except FileNotFoundError:
-        st.error("데이터가 없습니다. `python scripts/build_dataset.py` 를 먼저 실행하세요.")
+    except FileNotFoundError as exc:
+        layout.missing_artifact(exc, what="웨이퍼맵 탐색")
         return
 
     st.markdown(

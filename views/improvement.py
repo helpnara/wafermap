@@ -174,7 +174,7 @@ def render() -> None:
     try:
         data = _load(SOURCE)
     except FileNotFoundError as exc:
-        st.error(str(exc))
+        layout.missing_artifact(exc, what="개선방안·기대효과")
         return
 
     patterns = list(data["patterns"])

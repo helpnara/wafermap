@@ -244,8 +244,9 @@ def _quality(master: pd.DataFrame, truth: pd.DataFrame) -> None:
                     "결측": n_null,
                     # `%.1f%%` 서식은 값을 100배 하지 않는다. 비율 그대로 넘기면 0.9%로 찍힌다.
                     "비율": 100 * n_null / len(df),
-                    "판정": ("설계상 정상" if spec.get(col) and spec[col].nullable
-                             else "⚠️ 규격 위반"),
+                    # 좁은 화면에서 열이 잘리므로 판정은 짧게 쓴다.
+                    "판정": ("정상" if spec.get(col) and spec[col].nullable
+                             else "⚠️ 위반"),
                 })
         if rows:
             st.dataframe(
@@ -284,7 +285,8 @@ def _yield_figure(master: pd.DataFrame) -> None:
         xaxis_title="수율 (%)", yaxis_title="웨이퍼 수",
         legend=dict(orientation="h", y=1.12, x=0),
     )
-    st.plotly_chart(fig, width="stretch")
+    # 모바일에서 모드바가 범례를 덮는다. 읽기만 하는 그림이라 도구는 끈다.
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
     gap = normal.mean() - defect.mean()
     st.caption(
@@ -338,16 +340,15 @@ def render() -> None:
     st.markdown(theme.CSS, unsafe_allow_html=True)
     st.title("데이터 개요")
 
-    if not loader.is_built(SOURCE):
-        st.warning("데이터셋이 없습니다. `python scripts/build_dataset.py`를 먼저 실행하세요.")
+    try:
+        master = _master(SOURCE)
+        truth = _truth(SOURCE)
+        fdc = _fdc(SOURCE)
+    except FileNotFoundError as exc:
+        layout.missing_artifact(exc, what="데이터 개요")
         return
 
     _why_this_matters()
-
-    master = _master(SOURCE)
-    truth = _truth(SOURCE)
-    fdc = _fdc(SOURCE)
-
     _hierarchy(master)
     st.divider()
     _dictionary(master, fdc, truth)

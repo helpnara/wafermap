@@ -117,12 +117,8 @@ def render() -> None:
 
     try:
         summary = _summary(SOURCE)
-    except FileNotFoundError:
-        st.error(
-            "데이터가 없습니다. 터미널에서 먼저 실행하세요:\n\n"
-            "```\npython scripts/build_dataset.py\npython scripts/build_features.py\n"
-            "python scripts/train_pattern_model.py\npython scripts/build_recommendations.py\n```"
-        )
+    except FileNotFoundError as exc:
+        layout.missing_artifact(exc, what="개요 화면")
         return
 
     start, end = summary["period"]

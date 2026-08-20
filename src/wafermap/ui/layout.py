@@ -102,3 +102,35 @@ def metric_grid(items: list[tuple[str, str, str | None]], *, desktop_cols: int =
         f'<div class="wm-kpi" style="--wm-cols:{n_cols}">{"".join(cells)}</div>',
         unsafe_allow_html=True,
     )
+
+
+def missing_artifact(exc: Exception, *, what: str = "") -> None:
+    """필요한 데이터·아티팩트가 없을 때의 화면을 한 곳에서 그린다.
+
+    왜 공통으로 두나 ★: 화면마다 제각각 문구를 쓰면 같은 상황인데 다르게 보인다.
+        실제로 "데이터가 없습니다", "데이터셋이 없습니다", 그리고 예외 메시지를
+        그대로 흘리는 것 — 세 가지가 섞여 있었다. 더 나쁜 것은 안내하는 명령이
+        틀리는 경우다. 원인 분석 화면에 필요한 것은 `build_rootcause.py`인데
+        `build_dataset.py`를 안내하면 사용자는 시키는 대로 하고도 같은 화면을 본다.
+
+    로더가 던지는 예외 메시지에 이미 정확한 명령이 들어 있으므로, 여기서는 그것을
+    **파싱해서 명령만 코드 블록으로 떼어 낸다.** 화면이 명령을 따로 적어 두면
+    스크립트 이름이 바뀔 때 어긋난다.
+
+    Args:
+        exc: 로더/아티팩트가 던진 예외
+        what: 이 화면이 무엇을 하려 했는지 (한 줄). 비우면 일반 문구를 쓴다.
+    """
+    lines = [line.strip() for line in str(exc).splitlines() if line.strip()]
+    commands = [line for line in lines if "python " in line]
+    reason = next((line for line in lines if line not in commands), str(exc))
+
+    st.warning(
+        f"{what or '이 화면'}에 필요한 데이터가 아직 없습니다.\n\n{reason}"
+    )
+    for line in commands:
+        # "먼저 실행하세요: python ..." 형태에서 명령만 떼어 복사하기 쉽게 둔다.
+        st.code(line.split(":", 1)[-1].strip() if ":" in line else line, language="bash")
+    st.caption(
+        "전체 파이프라인 순서는 **도움말·학습** 화면의 단계별 재현 명령에서 볼 수 있습니다."
+    )
