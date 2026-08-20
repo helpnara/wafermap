@@ -61,8 +61,12 @@ streamlit run app.py
 | 문서 | 내용 |
 |---|---|
 | [`docs/00_design.md`](docs/00_design.md) | 설계서 — 데이터 전략, 화면 설계, 반응형/접근성 |
+| [`docs/01_domain_eds.md`](docs/01_domain_eds.md) | **EDS 도메인 입문** — 다른 산업에서 온 사람을 위한 배경 |
+| [`docs/02_data_dictionary.md`](docs/02_data_dictionary.md) | 데이터 사전 (코드에서 생성) |
+| [`docs/03_simulator_spec.md`](docs/03_simulator_spec.md) | 시뮬레이터 명세 — 무엇을 어떻게 심는가 |
 | [`docs/04_results.md`](docs/04_results.md) | 분석 결과와 **발견한 문제들** (포트폴리오 본문) |
 | [`docs/05_learning_guide.md`](docs/05_learning_guide.md) | 코드 학습 로드맵 |
+| [`docs/06_local_validation.md`](docs/06_local_validation.md) | 실측(WM-811K) 전환 절차와 함정 |
 | [`docs/07_local_setup.md`](docs/07_local_setup.md) | 로컬 환경 구축 · VS Code · GitHub |
 | [`docs/08_interpretation_guide.md`](docs/08_interpretation_guide.md) | 분석 결과 해석 가이드 |
 | [`docs/09_roadmap.md`](docs/09_roadmap.md) | **남은 작업 목록** |

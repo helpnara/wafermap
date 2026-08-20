@@ -146,7 +146,9 @@ M3~M5에서 얻는 것은 "맵이 지저분해져 M2가 틀리기 시작할 때 
 - [ ] **M2 실측 재측정** — 로컬에서 `LSWMD.pkl`(약 2GB)을 받아 실행.
       원격 세션은 컨테이너가 회수되므로 로컬 전용이다
 - [ ] M3~M5 실측 맵 강건성 관찰 (재측정 아님 — 위 표 참고)
-- [ ] `docs/01_domain_eds.md`, `02_data_dictionary.md`, `03_simulator_spec.md` 작성
+- [x] `docs/01_domain_eds.md` — EDS 도메인 입문 (다른 산업에서 온 사람 기준)
+- [x] `docs/02_data_dictionary.md` — **코드에서 생성**한다 (`scripts/build_data_dictionary.py`). 손으로 쓴 사전은 컬럼이 늘 때마다 조용히 낡는다
+- [x] `docs/03_simulator_spec.md` — 무엇을 어떻게 심는가, **일부러 안 넣은 것**까지. 인용한 숫자는 `tests/test_docs_match_config.py`가 코드와 대조한다
 - [ ] Streamlit Community Cloud 배포 (RAM 1GB 제약 — 사전 계산 아티팩트 전략 검증)
 - [ ] 포트폴리오용 요약 페이지
 
