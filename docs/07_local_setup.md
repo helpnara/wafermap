@@ -201,11 +201,70 @@ pip install -r requirements-dev.txt
 python scripts/build_dataset.py           # 5초    — 웨이퍼 맵 6,000장 + FDC 54,000행
 python scripts/build_features.py          # 83초   — 기하·Radon 피처 추출
 python scripts/train_pattern_model.py     # 23초   — LightGBM 패턴 분류 모델
-python scripts/build_recommendations.py   # 12초   — M3→M4→M5 파이프라인 결과
-python scripts/build_rootcause.py         # 40초   — 원인 분석 화면용 결과
+python scripts/build_rootcause.py         # 51초   — 원인 분석 화면용 결과
+python scripts/build_recommendations.py   # 8초    — 조치안·기대효과 결과
 ```
 
 **총 3분 남짓**입니다. PC 성능에 따라 다소 차이가 납니다.
+
+> **순서를 지켜야 하는 이유**: 위에서 아래로 의존합니다. 피처가 바뀌면 그것을
+> 입력으로 쓰는 모델과 아티팩트가 **전부** 다시 필요합니다. 중간부터 돌리면
+> 세대가 어긋난 산출물이 섞입니다.
+
+### 5-A. 이미 작업하던 로컬이 있다면 — 갱신 절차 ★★
+
+**여기가 가장 흔하게 사고가 나는 지점입니다.**
+
+이 저장소는 `models/` 는 **커밋하지만** `data/processed/` 는 커밋하지 않습니다.
+그래서 `git pull` 을 하면 이런 조합이 생깁니다.
+
+```
+   git pull  ──→  models/synthetic/     새 모델    (피처 99종을 요구)
+                  data/processed/       옛 데이터  (피처 121종이 들어 있음)
+                                        ↑ pull이 건드리지 않는다
+```
+
+이 상태로 앱을 켜면 화면마다 다른 이유로 실패합니다.
+**추측하지 말고 도구에게 물어보세요.**
+
+```bash
+python scripts/check_state.py
+```
+
+산출물이 지금 코드와 맞는지 항목별로 확인하고, 어긋났으면 **어느 명령부터
+다시 돌려야 하는지**를 순서대로 찍어 줍니다.
+
+```
+❌ 피처 파일
+     코드와 어긋남 — 없는 것 20개 (예: ['radon_cv_0', …]) · 옛 피처가 남음 21개
+     → python scripts/build_features.py --source synthetic
+
+ 다시 만들어야 할 것 2건. 아래를 순서대로 실행하세요:
+   (앞 단계가 바뀌면 뒤 단계도 전부 다시 만들어야 합니다)
+   python scripts/build_features.py --source synthetic
+   python scripts/train_pattern_model.py --source synthetic
+   ...
+```
+
+전부 최신이면 `✅ 모두 최신입니다` 가 나옵니다.
+
+#### 확실하게 하려면 — 전체 재생성
+
+산출물은 **시드 고정으로 결정적**이라 다시 만들어도 같은 결과가 나옵니다.
+3분이면 끝나므로, 애매하면 지우고 다시 만드는 편이 빠릅니다.
+
+```bash
+# Windows PowerShell
+Remove-Item -Recurse -Force data\processed\synthetic
+
+# macOS / Linux
+rm -rf data/processed/synthetic
+```
+
+그리고 위 §5의 5개 명령을 순서대로 실행합니다.
+
+> **`models/` 는 지우지 마세요.** git이 관리하므로 `git pull` 로 이미 최신입니다.
+> 실수로 지웠다면 `git checkout -- models/` 로 되돌립니다.
 
 ### 선택 — CNN 비교 모델 (오래 걸림)
 
@@ -213,15 +272,22 @@ python scripts/build_rootcause.py         # 40초   — 원인 분석 화면용 
 python scripts/train_pattern_cnn.py       # 약 10~15분 (CPU 기준)
 ```
 
-CNN은 **LightGBM과 비교해 보여주기 위한 대조군**입니다(결과: LightGBM 0.974 vs CNN 0.946).
+CNN은 **LightGBM과 비교해 보여주기 위한 대조군**입니다(결과: LightGBM 0.973 vs CNN 0.946).
 앱 실행에는 필요 없으니 건너뛰어도 됩니다.
 
 ### 잘 만들어졌는지 확인
 
 ```bash
+python scripts/check_state.py
+```
+
+파일 목록만 보고 싶다면:
+
+```bash
 ls data/processed/synthetic/
 # die_map.npz  excursions.parquet  fdc_summary.parquet  fdc_trace.parquet
-# features.parquet  ground_truth.parquet  recommendations.json  wafer_master.parquet
+# features.parquet  ground_truth.parquet  recommendations.json  rootcause.json
+# wafer_master.parquet
 ```
 
 ---
@@ -328,6 +394,15 @@ git push -u origin claude/semiconductor-eds-model-design-1hfzrk
 git pull origin claude/semiconductor-eds-model-design-1hfzrk
 ```
 
+**받은 뒤에는 반드시 산출물 상태를 확인하세요.** `git pull` 은 `data/processed/` 를
+건드리지 않으므로, 코드만 새것이고 데이터는 옛것인 상태가 됩니다.
+
+```bash
+python scripts/check_state.py
+```
+
+자세한 절차는 [5-A. 이미 작업하던 로컬이 있다면](#5-a-이미-작업하던-로컬이-있다면--갱신-절차-)에 있습니다.
+
 > ⚠️ 양쪽에서 같은 파일을 동시에 고치면 충돌이 납니다.
 > **로컬에서 실험하실 땐 별도 브랜치를 파시는 것을 권합니다:**
 > ```bash
@@ -355,6 +430,29 @@ VS Code 재시작(`Ctrl+Shift+P` → `Developer: Reload Window`).
 ### `❌ 데이터가 없습니다. python scripts/build_dataset.py …`
 
 [5단계](#5-데이터와-모델-만들기-)를 건너뛰었습니다. 순서대로 다시 실행하세요.
+
+### `ValueError: 피처 파일이 모델과 맞지 않습니다 …` ★
+
+**`git pull` 후에 가장 흔한 오류입니다.** `models/` 는 git이 관리해 새것으로
+바뀌었는데 `data/processed/` 는 그대로라 세대가 어긋난 것입니다.
+
+```bash
+python scripts/check_state.py      # 무엇이 어긋났는지 + 어느 명령부터 돌릴지
+```
+
+안내대로 실행하면 됩니다. 보통 `build_features.py` 부터입니다.
+
+### `pytest` 는 통과하는데 앱 화면이 이상하다
+
+테스트는 **코드**를 검사하지 산출물의 세대를 보지 않습니다. 둘은 다른 문제라
+`check_state.py` 로 따로 확인해야 합니다.
+
+### 화면 수치가 문서와 다르다
+
+산출물이 낡았을 가능성이 첫 번째입니다(`check_state.py`). 그게 아니라면 **시드
+차이**일 수 있습니다 — 이 프로젝트의 M3·M4 수치는 시드에 따라 크게 흔들립니다
+(M3 원인 챔버 Top-1: 67% ± 17%). 단일 실행 수치를 성능이라고 보면 안 되는 이유는
+`docs/04_results.md` 의 "⚠️ 시드 재현성" 절에 있습니다.
 
 ### `FileNotFoundError: recommendations.json 가 없습니다`
 

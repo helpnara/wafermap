@@ -263,3 +263,24 @@ def test_cnn_build_dataset_label_alignment(small_maps):
     assert len(X) == len(y) == len(ids)
     for i, wid in enumerate(ids):
         assert PATTERN_LABELS[y[i]] == labels[wid], f"{wid}: 라벨이 어긋남"
+
+
+def test_predict_explains_stale_feature_file():
+    """피처 파일이 모델보다 낡았을 때 무엇을 해야 하는지 알려 주는가.
+
+    왜 이 테스트가 필요한가 ★: `models/` 는 git에 커밋되지만 `data/processed/` 는
+        아니다. 그래서 저장소를 받으면 **새 모델 옆에 옛 피처 파일**이 남는 조합이
+        아주 쉽게 생긴다. 그냥 두면 pandas가 없는 컬럼 수십 개를 나열한 KeyError를
+        던져서, 보는 사람이 "무엇을 해야 하나"를 알아내기 어렵다.
+    """
+    from wafermap.models import pattern_lgbm
+
+    features = pd.DataFrame({"wafer_id": ["W1"], "keep_me": [1.0]})
+    dummy_model = object()  # 검증에서 걸리므로 모델은 쓰이지 않는다
+
+    with pytest.raises(ValueError) as excinfo:
+        pattern_lgbm.predict(dummy_model, features, ["keep_me", "gone_1", "gone_2"])
+
+    message = str(excinfo.value)
+    assert "build_features.py" in message, "다음에 할 일이 안내되지 않는다"
+    assert "gone_1" in message, "어떤 피처가 없는지 알려 주지 않는다"

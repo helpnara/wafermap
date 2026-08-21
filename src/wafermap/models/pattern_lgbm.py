@@ -366,7 +366,24 @@ def predict(model, features: pd.DataFrame, feature_cols: list[str]) -> pd.DataFr
 
     Returns:
         wafer_id, pred_label, pred_confidence + 클래스별 확률
+
+    Raises:
+        ValueError: 피처 파일이 모델보다 낡았을 때 — 무엇을 해야 하는지 안내한다
     """
+    # ★ 모델과 피처 파일의 세대가 어긋나는 상황을 먼저 잡는다.
+    #   models/ 는 git에 커밋되지만 data/processed/ 는 아니다. 그래서 저장소를 받으면
+    #   **새 모델 옆에 옛 피처 파일**이 남는 조합이 아주 쉽게 생긴다.
+    #   그냥 두면 pandas가 KeyError에 없는 컬럼 99개를 나열해 원인을 알아보기 어렵다.
+    missing = [c for c in feature_cols if c not in features.columns]
+    if missing:
+        raise ValueError(
+            f"피처 파일이 모델과 맞지 않습니다 — 모델이 요구하는 {len(missing)}개가 없습니다.\n"
+            f"  없는 것(앞 5개): {missing[:5]}\n"
+            f"  피처 파일에 있는 컬럼 수: {len(features.columns)}\n"
+            f"  피처 코드가 바뀐 뒤 피처 파일을 다시 만들지 않은 경우입니다.\n"
+            f"  먼저 실행: python scripts/build_features.py"
+        )
+
     X = features[feature_cols].to_numpy(dtype=np.float32)
     proba = model.predict(X)
     idx = proba.argmax(axis=1)
